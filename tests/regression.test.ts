@@ -3,8 +3,8 @@ import { VERSION } from '../src/version.js';
 import { SYSTEM_PROMPT_TR } from '../src/prompts/system.js';
 
 describe('regression checks', () => {
-  it('uses release version 3.7.3', () => {
-    expect(VERSION).toBe('3.7.3');
+  it('uses release version 3.7.4', () => {
+    expect(VERSION).toBe('3.7.4');
   });
 
   it('removes duplicate divider and unsafe mandatory attack phrasing from system prompt', () => {
