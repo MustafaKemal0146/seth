@@ -348,4 +348,4 @@ src/
 
 ## 📄 Lisans
 
-MIT © 2025
+GNU Affero General Public License v3.0 (AGPL v3.0)
