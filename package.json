@@ -1,0 +1,73 @@
+{
+  "name": "seth",
+  "version": "3.7.1-alpha",
+  "description": "Terminalde çalışan yapay zeka kodlama ajanı. Claude, Gemini, OpenAI, Ollama. Türkçe arayüz. HİÇBİR SİSTEM GÜVENLİ DEĞİLDİR.",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "seth": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "TESTING.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:smoke": "tsx scripts/smoke-tests.ts",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "terminal",
+    "coding",
+    "claude",
+    "gemini",
+    "openai",
+    "ollama",
+    "llm",
+    "tool-use",
+    "seth"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@clack/prompts": "^1.2.0",
+    "@google/generative-ai": "^0.21.0",
+    "@types/react": "^19.2.14",
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.0",
+    "ink": "^7.0.0",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
+    "openai": "^4.73.0",
+    "ora": "^9.3.0",
+    "puppeteer": "^23.0.0",
+    "react": "^19.2.5",
+    "strip-ansi": "^7.1.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/marked": "^5.0.2",
+    "@types/marked-terminal": "^6.1.1",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "javascript-obfuscator": "^5.4.1",
+    "postject": "^1.0.0-alpha.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

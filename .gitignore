@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.env
+.claude/
+*.log
+*.zip
+*.txt
+Screenshot*
+oturum_ozet.txt
+seth güncelleme bilgileri.txt
+SETH-Apps/
