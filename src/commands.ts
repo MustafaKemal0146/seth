@@ -158,10 +158,6 @@ export const COMMANDS: Record<string, (args: string, ctx: CommandContext) => Pro
       `  ${cmd('/apikey')}                        API anahtarlarını yönet / sil`,
       `  ${cmd('/context')} ${chalk.dim('<miktar>')}             Token bütçesi (örn: 500k, 2M)`,
       '',
-      chalk.dim('  ─── Giriş & Güvenlik ────────────────────────────────────────'),
-      `  ${cmd('/giriş')}                         Hesap değiştir veya giriş yap`,
-      `  ${cmd('/çıkış')}                         Oturumu kapat ve uygulamadan çık`,
-      '',
       chalk.dim('  ─── Araçlar & Sistem ─────────────────────────────────────────'),
       `  ${cmd('/hook')} ${chalk.dim('[liste|örnek]')}           Hook sistemi (PreToolUse/PostToolUse)`,
       `  ${cmd('/rapor')} ${chalk.dim('pdf')}                    Güvenlik taramasını LaTeX/PDF olarak aktar`,
@@ -475,6 +471,48 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
           }
         }
       } catch { /* fallback */ }
+    } else if (ctx.currentProvider === 'lmstudio') {
+      try {
+        const baseUrl = ctx.config.providers.lmstudio?.baseUrl || 'http://localhost:1234';
+        const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const data = await res.json() as { data?: { id: string }[] };
+          models = data.data?.map(m => m.id) ?? [];
+        }
+      } catch { /* fallback */ }
+    } else if (ctx.currentProvider === 'mistral') {
+      try {
+        const apiKey = ctx.config.providers.mistral?.apiKey || process.env.MISTRAL_API_KEY;
+        if (apiKey) {
+          const res = await fetch('https://api.mistral.ai/v1/models', { headers: { Authorization: `Bearer ${apiKey}` } });
+          if (res.ok) {
+            const data = await res.json() as { data?: { id: string }[] };
+            models = (data.data || []).map(m => m.id).sort();
+          }
+        }
+      } catch { /* fallback */ }
+    } else if (ctx.currentProvider === 'deepseek') {
+      try {
+        const apiKey = ctx.config.providers.deepseek?.apiKey || process.env.DEEPSEEK_API_KEY;
+        if (apiKey) {
+          const res = await fetch('https://api.deepseek.com/v1/models', { headers: { Authorization: `Bearer ${apiKey}` } });
+          if (res.ok) {
+            const data = await res.json() as { data?: { id: string }[] };
+            models = (data.data || []).map(m => m.id).sort();
+          }
+        }
+      } catch { /* fallback */ }
+    } else if (ctx.currentProvider === 'xai') {
+      try {
+        const apiKey = ctx.config.providers.xai?.apiKey || process.env.XAI_API_KEY;
+        if (apiKey) {
+          const res = await fetch('https://api.x.ai/v1/models', { headers: { Authorization: `Bearer ${apiKey}` } });
+          if (res.ok) {
+            const data = await res.json() as { data?: { id: string }[] };
+            models = (data.data || []).map(m => m.id).sort();
+          }
+        }
+      } catch { /* fallback */ }
     }
 
     if (models.length === 0) {
@@ -485,6 +523,10 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
         ollama:      ['qwen3-coder', 'qwen2.5-coder:7b', 'llama3.1', 'mistral', 'codellama'],
         openrouter:  ['openai/gpt-4o', 'anthropic/claude-3.5-sonnet', 'google/gemini-2.5-pro', 'meta-llama/llama-3.1-70b-instruct', 'mistralai/mistral-7b-instruct'],
         groq:        ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama3-70b-8192', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+        mistral:     ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest', 'codestral-latest', 'open-mistral-nemo'],
+        deepseek:    ['deepseek-chat', 'deepseek-reasoner'],
+        xai:         ['grok-3-latest', 'grok-3-mini-latest', 'grok-2-latest'],
+        lmstudio:    ['local-model'],
       };
       models = defaults[ctx.currentProvider] ?? [];
     }
@@ -672,13 +714,34 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
     let content: string;
     if (fmt === 'html') {
       const rows = messages.map(m => {
-        const role = m.role === 'user' ? '👤 Sen' : '🤖 SETH';
-        const text = (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
+        const role = m.role === 'user' ? 'Sen' : 'SETH';
+        const text = (typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2))
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const bg = m.role === 'user' ? '#2a2a2a' : '#1a1a2e';
-        return `<div style="background:${bg};color:#eee;padding:12px 16px;margin:8px 0;border-radius:6px"><strong>${role}</strong><pre style="white-space:pre-wrap;margin:8px 0 0">${text}</pre></div>`;
+        const cls = m.role === 'user' ? 'user' : 'assistant';
+        return `<div class="msg ${cls}"><span class="role">${role}</span><pre>${text}</pre></div>`;
       }).join('\n');
-      content = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>SETH Sohbet</title></head><body style="background:#111;font-family:monospace;max-width:900px;margin:auto;padding:20px">${rows}</body></html>`;
+      content = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>SETH Sohbet</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0d0d0d;color:#e0e0e0;font-family:'Courier New',monospace;max-width:900px;margin:0 auto;padding:24px}
+  h1{color:#cc0000;font-size:1.4rem;margin-bottom:20px;border-bottom:1px solid #333;padding-bottom:10px}
+  .msg{padding:14px 18px;margin:10px 0;border-radius:8px;border-left:3px solid transparent}
+  .user{background:#1e1e1e;border-color:#555}
+  .assistant{background:#0f1a2e;border-color:#cc0000}
+  .role{font-size:.75rem;font-weight:bold;text-transform:uppercase;letter-spacing:.1em;opacity:.6;display:block;margin-bottom:6px}
+  .user .role{color:#aaa}
+  .assistant .role{color:#cc4444}
+  pre{white-space:pre-wrap;word-break:break-word;font-size:.9rem;line-height:1.6}
+</style>
+</head>
+<body>
+<h1>🐍 SETH — Sohbet Kaydı</h1>
+${rows}
+</body></html>`;
     } else if (fmt === 'txt') {
       content = messages.map(m => `[${m.role.toUpperCase()}]\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}\n`).join('\n---\n\n');
     } else {
@@ -688,6 +751,51 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
     await writeFile(resolve(ctx.getCwd(), filename), content);
     return { output: chalk.green(`✓ Kaydedildi: ${filename} (${fmt.toUpperCase()})`) };
   },
+
+  // #18 /export — oturum export/import
+  export: async (args, ctx) => {
+    const parts = args.trim().split(' ');
+    const fmt = ['json', 'md', 'html'].includes(parts[0] ?? '') ? parts.shift()! : 'json';
+    const filename = parts.join(' ') || `seth_export_${Date.now()}.${fmt}`;
+    const messages = ctx.getHistory();
+    const stats = ctx.getStats();
+
+    let content: string;
+    if (fmt === 'json') {
+      content = JSON.stringify({
+        version: VERSION,
+        provider: ctx.currentProvider,
+        model: ctx.currentModel,
+        exportedAt: new Date().toISOString(),
+        stats,
+        messages: messages.map(m => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        })),
+      }, null, 2);
+    } else if (fmt === 'md') {
+      const header = `# SETH Oturum Kaydı\n\n**Provider:** ${ctx.currentProvider} / ${ctx.currentModel}  \n**Tarih:** ${new Date().toLocaleString('tr-TR')}  \n**Mesaj:** ${stats.messages}  \n\n---\n\n`;
+      content = header + messages.map(m => {
+        const role = m.role === 'user' ? '**Sen**' : '**SETH**';
+        const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2);
+        return `${role}\n\n${text}`;
+      }).join('\n\n---\n\n');
+    } else {
+      // HTML — kaydet komutuyla aynı CSS
+      const rows = messages.map(m => {
+        const role = m.role === 'user' ? 'Sen' : 'SETH';
+        const text = (typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2))
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const cls = m.role === 'user' ? 'user' : 'assistant';
+        return `<div class="msg ${cls}"><span class="role">${role}</span><pre>${text}</pre></div>`;
+      }).join('\n');
+      content = `<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><title>SETH Export</title><style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0d0d0d;color:#e0e0e0;font-family:'Courier New',monospace;max-width:900px;margin:0 auto;padding:24px}h1{color:#cc0000;font-size:1.4rem;margin-bottom:20px;border-bottom:1px solid #333;padding-bottom:10px}.msg{padding:14px 18px;margin:10px 0;border-radius:8px;border-left:3px solid transparent}.user{background:#1e1e1e;border-color:#555}.assistant{background:#0f1a2e;border-color:#cc0000}.role{font-size:.75rem;font-weight:bold;text-transform:uppercase;letter-spacing:.1em;opacity:.6;display:block;margin-bottom:6px}.user .role{color:#aaa}.assistant .role{color:#cc4444}pre{white-space:pre-wrap;word-break:break-word;font-size:.9rem;line-height:1.6}</style></head><body><h1>🐍 SETH Export — ${ctx.currentProvider}/${ctx.currentModel}</h1>${rows}</body></html>`;
+    }
+
+    await writeFile(resolve(ctx.getCwd(), filename), content);
+    return { output: chalk.green(`✓ Export: ${filename} (${fmt.toUpperCase()}, ${messages.length} mesaj)`) };
+  },
+
   bellek: async (args, ctx) => {
     const sub = args.trim();
     // /bellek kaydet <tip> <içerik>
@@ -746,11 +854,6 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
     console.log(lines.join('\n'));
 
     // Günlük kullanım bilgilerini getir
-    const { showUsage, currentUser } = await import('./auth.js');
-    if (currentUser) {
-      await showUsage(currentUser.id);
-    }
-
     return { output: chalk.dim('  Token maliyeti tahminidir, gerçek fiyat sağlayıcıya göre değişir.') };
   },
   repo_özet: async (_args, ctx) => { const res = await runRepoOzetSummary(ctx.getCwd()); return { output: res.output }; },
@@ -880,6 +983,20 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
     }
 
     return { output: '' };
+  },
+
+  // ─── Provider Bağlantı Testi ──────────────────────────────────────────────
+  'provider-test': async (_args, ctx) => {
+    const lines: string[] = [chalk.bold('🔌 Provider Bağlantı Testi'), ''];
+    const tests: Array<{ name: string; fn: () => Promise<number | null> }> = [
+      { name: 'ollama', fn: async () => { const t = Date.now(); const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(3000) }).catch(() => null); return r?.ok ? Date.now() - t : null; } },
+      { name: 'lmstudio', fn: async () => { const t = Date.now(); const r = await fetch('http://localhost:1234/v1/models', { signal: AbortSignal.timeout(3000) }).catch(() => null); return r?.ok ? Date.now() - t : null; } },
+    ];
+    for (const test of tests) {
+      const ms = await test.fn().catch(() => null);
+      lines.push(`  ${ms !== null ? chalk.green('✓') : chalk.red('✗')} ${test.name.padEnd(12)} ${ms !== null ? chalk.dim(`${ms}ms`) : chalk.red('bağlanamadı')}`);
+    }
+    return { output: lines.join('\n') };
   },
 
   web: async (args, ctx) => {
@@ -1087,21 +1204,86 @@ SETH artık sadece bir araç değil, bir ordu gibi düşünen 'Leviathan' çekir
 
   cikis: () => ({ shouldExit: true }),
 
-  kullanım: async (_args, ctx) => {
-    const { showUsage } = await import('./auth.js');
-    await showUsage('local');
-    return { output: '' };
+  kullanım: async (_args, _ctx) => {
+    return { output: chalk.dim('  Yerel modda çalışıyorsunuz.') };
   },
 
-  giriş: async () => {
-    const { sethLogin } = await import('./auth.js');
-    await sethLogin();
-    return { output: '' };
+  // #21 Çoklu ajan koordinasyonu
+  'ajan-koordinasyon': async (args, ctx) => {
+    const sub = args.trim();
+    if (!sub || sub === 'yardım') {
+      return { output: [
+        chalk.bold('🤖 Çoklu Ajan Koordinasyonu'),
+        '',
+        `  ${cmd('/ajan-koordinasyon')} ${chalk.dim('başlat <görev>')}    Yeni alt ajan başlat`,
+        `  ${cmd('/ajan-koordinasyon')} ${chalk.dim('durum')}             Aktif ajanları listele`,
+        `  ${cmd('/ajan-koordinasyon')} ${chalk.dim('durdur <id>')}       Ajanı durdur`,
+      ].join('\n') };
+    }
+    if (sub.startsWith('başlat ') || sub.startsWith('basla ')) {
+      const task = sub.replace(/^(başlat|basla)\s+/, '');
+      return { runAsUserMessage: `[ALT AJAN GÖREVİ]: ${task}` };
+    }
+    if (sub === 'durum') {
+      const { taskListTool } = await import('./tools/background-tasks.js');
+      const result = await taskListTool.execute({}, ctx.getCwd());
+      return { output: result.output || chalk.dim('  Aktif ajan yok.') };
+    }
+    return { output: chalk.red('Bilinmeyen alt komut. /ajan-koordinasyon yardım') };
+  },
+
+  // #24 Oturum export/import
+  'oturum-export': async (args, ctx) => {
+    const filename = args.trim() || `seth_session_${Date.now()}.json`;
+    const messages = ctx.getHistory();
+    const data = {
+      version: VERSION,
+      provider: ctx.currentProvider,
+      model: ctx.currentModel,
+      exportedAt: new Date().toISOString(),
+      messages: messages.map(m => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      })),
+    };
+    await writeFile(resolve(ctx.getCwd(), filename), JSON.stringify(data, null, 2));
+    return { output: chalk.green(`✓ Oturum export edildi: ${filename}`) };
+  },
+
+  'oturum-import': async (args, ctx) => {
+    const filename = args.trim();
+    if (!filename) return { output: chalk.red('Kullanım: /oturum-import <dosya.json>') };
+    try {
+      const { readFile: rf } = await import('fs/promises');
+      const raw = await rf(resolve(ctx.getCwd(), filename), 'utf-8');
+      const data = JSON.parse(raw) as { messages?: Array<{ role: string; content: string }> };
+      if (!data.messages) return { output: chalk.red('Geçersiz oturum dosyası.') };
+      return { output: chalk.green(`✓ ${data.messages.length} mesaj yüklendi. Konuşmaya devam edebilirsiniz.`) };
+    } catch (e) {
+      return { output: chalk.red(`Import hatası: ${e instanceof Error ? e.message : String(e)}`), isError: true };
+    }
+  },
+
+  // #23 MCP keşif
+  'mcp-keşif': async () => {
+    const { discoverMcpServers } = await import('./mcp/discovery.js');
+    const found = await discoverMcpServers();
+    if (found.length === 0) return { output: chalk.dim('  Yüklü MCP server bulunamadı.') };
+    return { output: [
+      chalk.bold('🔌 Bulunan MCP Server\'lar:'),
+      ...found.map(s => `  ${chalk.green('✓')} ${s.name.padEnd(15)} ${chalk.dim(s.description)}`),
+    ].join('\n') };
+  },
+
+  // #22 Git worktree
+  worktree: async (args, ctx) => {
+    const parts = args.trim().split(' ');
+    const action = parts[0] || 'list';
+    const { gitWorktreeTool } = await import('./tools/git-worktree.js');
+    return gitWorktreeTool.execute({ action, path: parts[1], branch: parts[2] }, ctx.getCwd());
   },
 
   çıkış: async () => {
-    const { sethCikis } = await import('./auth.js');
-    await sethCikis();
     return { output: '', shouldExit: true };
   },
 

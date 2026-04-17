@@ -1,6 +1,16 @@
 import chalk from 'chalk';
 import { VERSION } from './version.js';
 import * as os from 'os';
+import { checkForUpdates } from './update-check.js';
+
+let _updateMessage: string | null = null;
+
+async function checkForUpdatesAsync(): Promise<void> {
+  const result = await checkForUpdates();
+  if (result?.hasUpdate) {
+    _updateMessage = `  ↑ Yeni sürüm: v${result.latestVersion}  →  npm install -g seth`;
+  }
+}
 
 const SETH_LINES = [
   ' ███████╗███████╗████████╗██╗  ██╗',
@@ -69,6 +79,9 @@ export async function playIntro(provider: string, model: string, userEmail: stri
   // Dar terminal veya CI ortamında animasyonu atla
   const cols = process.stdout.columns ?? 80;
   if (!process.stdout.isTTY || cols < 40) return;
+
+  // Arka planda güncelleme kontrolü (non-blocking)
+  checkForUpdatesAsync().catch(() => {});
 
   return new Promise((resolve) => {
     const TOP = 1;
@@ -154,6 +167,9 @@ export async function playIntro(provider: string, model: string, userEmail: stri
             moveTo(base + 1, LEFT); process.stdout.write(`\x1b[38;5;75m  ✦ ${provider}/${model}\x1b[0m`);
             moveTo(base + 2, LEFT); process.stdout.write(`\x1b[2;38;5;75m  ⌂ ${shortenPath(process.cwd())}\x1b[0m`);
             moveTo(base + 4, LEFT); process.stdout.write(`\x1b[2m  /yardım → komutlar  •  Ctrl+C → iptal  •  Ctrl+D → çıkış\x1b[0m`);
+            if (_updateMessage) {
+              moveTo(base + 5, LEFT); process.stdout.write(`\x1b[33m${_updateMessage}\x1b[0m`);
+            }
             // imleci bilgi satırlarının altına taşı
             moveTo(base + 6, 0);
             showCursor();

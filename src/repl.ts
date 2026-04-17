@@ -500,17 +500,6 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
 
         onTurnStart: () => {
           stream.onTurnStart(finalInput);
-          // Her istekte (tur başladığında) kullanım takibi yap
-          import('./auth.js').then(({ trackUsage, currentUser }) => {
-            if (currentUser) {
-              trackUsage(currentUser.id, 'ai_request', { 
-                model: currentModel, 
-                provider: currentProvider,
-                input_length: finalInput.length 
-              });
-            }
-          });
-
           if (!didClearSpinner) {
             startSpinner('Düşünüyor…', true, { thinkingMode: spinOpts.thinkingMode });
           }
@@ -617,6 +606,17 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       totalTurns += result.turns;
       session = updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, result.totalUsage);
       saveSession(session);
+
+      // #14 Otomatik sıkıştırma önerisi — %80 dolunca bir kez uyar
+      const newTotalCum = totalUsage.inputTokens + totalUsage.outputTokens;
+      const newBudget = getEffectiveContextBudgetTokens(appConfig);
+      if (newBudget > 0 && newTotalCum / newBudget >= 0.80) {
+        const alreadyWarned = (session as any)._compactWarned;
+        if (!alreadyWarned) {
+          (session as any)._compactWarned = true;
+          console.log(chalk.yellow('\n  ⚠  Bağlam %80 doldu. /sıkıştır komutuyla token tasarrufu yapabilirsiniz.\n'));
+        }
+      }
 
     } catch (err: any) {
       clearSpin();
@@ -728,14 +728,28 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
 
         // Silme
         if (key.name === 'x') { if (rl) rl.write(null, { name: 'delete' }); renderVimStatus(); return true; }
-        if (s === 'd' || s === 'D') { if (rl) rl.write(null, { ctrl: true, name: 'u' }); renderVimStatus(); return true; }
+        if (s === 'D') { if (rl) rl.write(null, { ctrl: true, name: 'k' }); renderVimStatus(); return true; }
+        // dd — satırı sil (ctrl+a sonra ctrl+k)
+        if (s === 'd') {
+          if (rl) { rl.write(null, { ctrl: true, name: 'a' }); rl.write(null, { ctrl: true, name: 'k' }); }
+          renderVimStatus(); return true;
+        }
 
         // Geçmiş (G = en son, gg = en eski)
         if (s === 'G') { if (rl) rl.write(null, { name: 'down' }); renderVimStatus(); return true; }
         if (s === 'g') { if (rl) rl.write(null, { name: 'up' }); renderVimStatus(); return true; }
 
-        // Yank & paste (yy = satırı kopyala, p = yapıştır — readline'da ctrl+y)
-        if (s === 'y') { /* yank: readline'da clipboard yok, no-op */ renderVimStatus(); return true; }
+        // yy — satırı kopyala (readline'da ctrl+a ctrl+k ile kes, sonra ctrl+y ile geri koy)
+        if (s === 'y') {
+          if (rl) {
+            const line = rl.line;
+            rl.write(null, { ctrl: true, name: 'a' });
+            rl.write(null, { ctrl: true, name: 'k' });
+            // Geri yaz (yank = kopyala, satırı koru)
+            rl.write(line);
+          }
+          renderVimStatus(); return true;
+        }
         if (s === 'p') { if (rl) rl.write(null, { ctrl: true, name: 'y' }); renderVimStatus(); return true; }
 
         // Diğer tuşları NORMAL modda yut
@@ -861,7 +875,7 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
             if (result?.output) console.log(result.output);
             if (result?.clearAndAnimate) {
               process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
-              renderWelcomeAnimation(currentProvider, currentModel, userEmail);
+              renderWelcomeAnimation(currentProvider, currentModel);
             }
             if (result?.runAsUserMessage) {
               // Oturum devam ettirme sinyali

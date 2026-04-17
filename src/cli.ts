@@ -13,24 +13,10 @@
 
 import type { ProviderName, SETHConfig } from './types.js';
 import { VERSION } from './version.js';
-import { checkAuth, sethLogin, sethCikis, showUsage, trackUsage } from './auth.js';
 import chalk from 'chalk';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-
-  // 1. Türkçe Giriş/Çıkış Komutları
-  if (args[0] === 'giriş' || args[0] === 'giris' || args[0] === 'login') {
-    await sethLogin();
-    process.exit(0);
-  }
-  if (args[0] === 'çıkış' || args[0] === 'cikis' || args[0] === 'logout') {
-    await sethCikis();
-    process.exit(0);
-  }
-
-  // 2. Oturum Kontrolü
-  const user = await checkAuth();
 
   // Parse arguments
   let prompt: string | undefined;
@@ -49,6 +35,12 @@ async function main(): Promise<void> {
         break;
       case '--provider':
         providerArg = args[++i] as ProviderName;
+        // Doğrulama
+        const validProviders: ProviderName[] = ['claude', 'gemini', 'openai', 'ollama', 'groq', 'deepseek', 'mistral', 'xai', 'lmstudio', 'openrouter'];
+        if (!validProviders.includes(providerArg)) {
+          console.error(chalk.red(`Hata: Geçersiz provider "${providerArg}". Geçerli olanlar: ${validProviders.join(', ')}`));
+          process.exit(1);
+        }
         break;
       case '--model':
         modelArg = args[++i];
@@ -105,11 +97,10 @@ async function main(): Promise<void> {
     const { resolveModel } = await import('./config/settings.js');
     const cfg = loadConfig(configOverrides);
     const { playIntro } = await import('./intro.js');
-    const userEmail = ((user as any)?.email as string | undefined) ?? '';
-    await playIntro(cfg.defaultProvider, resolveModel(cfg.defaultProvider, cfg, modelArg), userEmail);
+    await playIntro(cfg.defaultProvider, resolveModel(cfg.defaultProvider, cfg, modelArg), '');
 
     const { startRepl } = await import('./repl.js');
-    await startRepl(configOverrides, true, resumeId, userEmail);
+    await startRepl(configOverrides, true, resumeId, '');
   }
 }
 
@@ -135,21 +126,29 @@ function printHelp(): void {
   REPL Komutları:
     /degistir                           Etkileşimli ayar menüsü
     /modeller                           Modelleri listele ve seç
-    /saglayici <isim>                   Sağlayıcı değiştir
+    /saglayici <isim>                   Sağlayıcı değiştir (10 provider)
     /model <isim>                       Model değiştir
     /araclar <acik|kapali>              Araçları aç/kapat
     /ajan <acik|kapali>                 Ajan (çok-tur) modunu aç/kapat
-    /context [250k|500k|1m|1.5m|2m]     Oturum token bütçesi
+    /context [250k|500k|1m|2m]          Oturum token bütçesi
     /kanal [a|b|durum]                  Çift hat (paralel sohbet)
     /cd <dizin>                         Çalışma dizinini değiştir
     /temizle [tum]                      Geçmiş (tum = her iki hat)
     /sikistir                           Geçmişi sıkıştır (token tasarrufu)
     /geri                               Son mesajı geri al
-    /kaydet [dosya]                     Konuşmayı dosyaya kaydet
+    /kaydet [md|html|txt] [dosya]       Konuşmayı dosyaya kaydet
+    /export [json|md|html] [dosya]      Oturumu dışa aktar
+    /oturum-export [dosya]              Oturumu JSON olarak kaydet
+    /oturum-import <dosya>              Önceki oturumu yükle
+    /hafiza                             Kalıcı bellek yönetimi
     /bellek                             Görev listesi + oturum özeti
     /istatistikler                      Oturum istatistikleri
+    /doktor                             Ortam sağlığı + araç kontrolü
+    /guncelle                           Yeni sürüm kontrolü
+    /worktree [list|add|remove]         Git worktree yönetimi
+    /ajan basla <gorev>                 Alt ajan başlat
+    /mcp-kesif                          MCP server keşfi
     /yardim                             Komutları listele
-    /nasilcalisir                       Kısa tur (yazma animasyonu)
     /cikis                              Çıkış
 
   Konfigürasyon:

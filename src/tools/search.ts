@@ -52,14 +52,15 @@ export const searchTool: ToolDefinition = {
     if (rg) {
       try {
         const args = [
-          '--line-number', '--color=never', '--max-count=50',
-          '--glob=!node_modules', '--glob=!.git', '--glob=!dist',
+          '--line-number', '--color=never', '--max-count=50', '--max-filesize=5M',
+          '--glob=!node_modules/**', '--glob=!.git/**', '--glob=!dist/**', '--glob=!build/**',
+          '--glob=!*.{jpg,jpeg,png,gif,ico,webp,mp4,webm,zip,tar,gz,pdf}',
           isRegex ? '--regexp' : '--fixed-strings', query, targetDir,
         ];
         const { stdout } = await execFileAsync(rg, args, { maxBuffer: 2 * 1024 * 1024 });
         const rgLines = stdout.trim().split('\n').filter(Boolean).slice(0, MAX_SEARCH_RESULTS);
         if (rgLines.length === 0) return { output: `"${query}" bulunamadı.`, isError: false };
-        return { output: rgLines.join('\n'), isError: false };
+        return { output: `${rgLines.length} eşleşme bulundu:\n\n${rgLines.join('\n')}`, isError: false };
       } catch (e: any) {
         if (e.code === 1) return { output: `"${query}" bulunamadı.`, isError: false };
       }

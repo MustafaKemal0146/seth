@@ -56,7 +56,7 @@ export class ConfigError extends SETHError {
 
 export class AbortError extends SETHError {
   constructor() {
-    super('Operation aborted by user', 'ABORT');
+    super('İşlem kullanıcı tarafından iptal edildi', 'ABORT');
     this.name = 'AbortError';
   }
 }

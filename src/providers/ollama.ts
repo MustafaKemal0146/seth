@@ -54,6 +54,23 @@ export class OllamaProvider implements LLMProvider {
     this.timeoutMs = timeoutMs;
   }
 
+  /**
+   * Ollama'dan mevcut modelleri çek.
+   */
+  async listModels(): Promise<string[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/tags`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as { models?: Array<{ name: string }> };
+      return data.models?.map(m => m.name) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatResponse> {
     const ollamaMessages = this.toOllamaMessages(messages, options.systemPrompt);
     const tools = options.tools ? options.tools.map(t => this.toOllamaTool(t)) : undefined;

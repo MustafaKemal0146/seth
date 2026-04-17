@@ -25,7 +25,13 @@ export async function runOnboardingIfNeeded(): Promise<void> {
     message: 'Ana yapay zeka sağlayıcınızı (Provider) seçin:',
     options: [
       { value: 'ollama', label: 'Ollama (Yerel, Ücretsiz, Gizli)', hint: 'Önerilen: qwen2.5-coder:7b' },
-      { value: 'claude', label: 'Anthropic Claude', hint: 'Önerilen: claude-3-5-sonnet' },
+      { value: 'lmstudio', label: 'LM Studio (Yerel)', hint: 'Önerilen: local-model' },
+      { value: 'groq', label: 'Groq (Hızlı, Ücretsiz Tier)', hint: 'Önerilen: llama-3.3-70b' },
+      { value: 'deepseek', label: 'DeepSeek (Ucuz, Güçlü)', hint: 'Önerilen: deepseek-chat' },
+      { value: 'mistral', label: 'Mistral AI', hint: 'Önerilen: mistral-large-latest' },
+      { value: 'xai', label: 'xAI (Grok)', hint: 'Önerilen: grok-3-latest' },
+      { value: 'openrouter', label: 'OpenRouter (300+ Model)', hint: 'Önerilen: openai/gpt-4o' },
+      { value: 'claude', label: 'Anthropic Claude', hint: 'Önerilen: claude-sonnet-4' },
       { value: 'openai', label: 'OpenAI (ChatGPT)', hint: 'Önerilen: gpt-4o' },
       { value: 'gemini', label: 'Google Gemini', hint: 'Önerilen: gemini-2.5-pro' },
     ],
@@ -71,20 +77,42 @@ export async function runOnboardingIfNeeded(): Promise<void> {
       defaultModel = 'qwen2.5-coder:7b';
     }
   } else {
-    // Cloud models
-    const apiKey = await text({
-      message: `${pName.toUpperCase()} API anahtarınızı girin (Boş bırakabilir ve .env ile verebilirsiniz):`,
-      placeholder: 'sk-...',
-    });
-    if (isCancel(apiKey)) process.exit(0);
-    
-    if (apiKey) {
-      partialConfig.providers[pName].apiKey = apiKey as string;
+    // Cloud / local models
+    const needsApiKey = !['lmstudio'].includes(pName);
+    if (needsApiKey) {
+      const apiKey = await text({
+        message: `${pName.toUpperCase()} API anahtarınızı girin (Boş bırakabilir ve .env ile verebilirsiniz):`,
+        placeholder: 'sk-...',
+      });
+      if (isCancel(apiKey)) process.exit(0);
+      if (apiKey) partialConfig.providers[pName].apiKey = apiKey as string;
     }
 
-    if (pName === 'claude') defaultModel = 'claude-3-7-sonnet-20250219';
-    if (pName === 'openai') defaultModel = 'gpt-4o';
-    if (pName === 'gemini') defaultModel = 'gemini-2.5-pro';
+    if (pName === 'lmstudio') {
+      // LM Studio model listesi çek
+      const s = spinner();
+      s.start('LM Studio modelleri taranıyor...');
+      try {
+        const res = await fetch('http://localhost:1234/v1/models').catch(() => null);
+        if (res && res.ok) {
+          const data = await res.json() as { data?: { id: string }[] };
+          const models = data.data?.map(m => m.id) ?? [];
+          s.stop('Bulundu.');
+          if (models.length > 0) {
+            const m = await select({ message: 'LM Studio modeli seçin:', options: models.map(m => ({ value: m, label: m })) });
+            if (isCancel(m)) process.exit(0);
+            defaultModel = m as string;
+          } else { defaultModel = 'local-model'; }
+        } else { s.stop('LM Studio bağlantısı kurulamadı.'); defaultModel = 'local-model'; }
+      } catch { s.stop('LM Studio hatası.'); defaultModel = 'local-model'; }
+    } else if (pName === 'claude') defaultModel = 'claude-sonnet-4-20250514';
+    else if (pName === 'openai') defaultModel = 'gpt-4o';
+    else if (pName === 'gemini') defaultModel = 'gemini-2.5-pro';
+    else if (pName === 'groq') defaultModel = 'llama-3.3-70b-versatile';
+    else if (pName === 'deepseek') defaultModel = 'deepseek-chat';
+    else if (pName === 'mistral') defaultModel = 'mistral-large-latest';
+    else if (pName === 'xai') defaultModel = 'grok-3-latest';
+    else if (pName === 'openrouter') defaultModel = 'openai/gpt-4o';
   }
 
   partialConfig.defaultModel = defaultModel;

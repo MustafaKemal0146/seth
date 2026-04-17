@@ -49,15 +49,23 @@ export const batchReadTool: ToolDefinition = {
     const results: FileReadResult[] = [];
     let totalSize = 0;
 
-    for (const path of paths) {
-      const filePath = resolve(cwd, path);
-      const result = await readSingleFile(filePath, showLineNumbers, MAX_TOTAL_SIZE - totalSize);
-      results.push(result);
+    // Paralel okuma — 5'er 5'er
+    const PARALLEL_LIMIT = 5;
+    for (let i = 0; i < paths.length; i += PARALLEL_LIMIT) {
+      const batch = paths.slice(i, i + PARALLEL_LIMIT);
+      const batchResults = await Promise.all(
+        batch.map(path => {
+          const filePath = resolve(cwd, path);
+          return readSingleFile(filePath, showLineNumbers, MAX_TOTAL_SIZE - totalSize);
+        })
+      );
       
-      if (!result.error) {
-        totalSize += result.size;
+      for (const result of batchResults) {
+        results.push(result);
+        if (!result.error) totalSize += result.size;
+        if (totalSize >= MAX_TOTAL_SIZE) break;
       }
-
+      
       if (totalSize >= MAX_TOTAL_SIZE) {
         results.push({
           path: '...',
