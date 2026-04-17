@@ -907,8 +907,15 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
         const pasted = pasteBuffer;
         pasteBuffer = '';
         if (!pasted.trim()) return;
-        // Sadece input'a yaz, gönderme — kullanıcı Enter'a bassın
-        if (rl) rl.write(pasted.replace(/\r\n/g, '\n').replace(/\r/g, '\n'));
+        // Newline'ları boşlukla değiştir — line event tetiklenmesin
+        // Çok satırlı paste'i tek satır olarak yaz
+        const singleLine = pasted.replace(/\r\n/g, ' ').replace(/\r/g, ' ').replace(/\n/g, ' ').trim();
+        lastPastedContent = pasted; // Orijinali sakla (Ctrl+O için)
+        if (rl) {
+          // Mevcut input'u temizle, paste'i yaz
+          rl.write(null, { ctrl: true, name: 'u' }); // satırı temizle
+          rl.write(singleLine);
+        }
         return;
       }
       if (inPaste) { pasteBuffer += s; return; }
@@ -999,10 +1006,12 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
         return;
       }
 
+      // Paste devam ediyorsa gönderme
+      if (inPaste) return;
+
       // Hızlı paste devam ediyorsa veya yeni bittiyse gönderme
-      // (Ctrl+Shift+V ile yapıştırılan son satır 100ms içinde gelir)
       if (rapidPasteTimer !== null) return;
-      if (rapidCharCount >= RAPID_MIN_CHARS) return; // timer henüz bitmedi
+      if (rapidCharCount >= RAPID_MIN_CHARS) return;
 
       if (vimState === 'NORMAL') {
         rl?.prompt();
