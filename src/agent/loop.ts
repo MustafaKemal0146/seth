@@ -27,6 +27,8 @@ export interface AgentLoopOptions {
   /** Tur sonunda (araç sonuçları eklendikten sonra, bir sonraki tura dönmeden önce). */
   onTurnEnd?: (turn: number, maxTurns: number) => void;
   abortSignal?: AbortSignal;
+  /** Düşünme seviyesi: low/medium/high/max */
+  effort?: string;
   /** Birincil sağlayıcı başarısız olursa kullanılacak yedek sağlayıcı */
   fallbackProvider?: LLMProvider;
   fallbackModel?: string;
@@ -72,11 +74,17 @@ export async function runAgentLoop(
 
     if (options.onTurnStart) options.onTurnStart(budget.turnsUsed, budget.maxTurns);
 
+    // Effort seviyesine göre maxTokens ayarla
+    const effortMaxTokens: Record<string, number> = {
+      low: 2048, medium: 8192, high: 16384, max: 32768,
+    };
+    const maxTokens = effortMaxTokens[options.effort ?? 'medium'] ?? 8192;
+
     const chatOptions: ChatOptions = {
       model: activeModel,
       systemPrompt: options.systemPrompt,
       tools: useTools ? toolSchemas : undefined,
-      maxTokens: 8192,
+      maxTokens,
       abortSignal: options.abortSignal,
     };
 

@@ -1,18 +1,15 @@
 /**
- * @fileoverview SETH Ink REPL — React+Ink tabanlı etkileşimli terminal UI.
+/**
+ * @fileoverview SETH REPL — readline tabanlı etkileşimli terminal arayüzü.
  *
- * main-code'daki gibi:
- *   - Full-screen Ink render
- *   - Spinner, ToolCall, ToolResult, StatsBar, ContextBar bileşenleri
- *   - Plan modu onay akışı
- *   - Alt-ajan derinlik göstergesi
- *   - Otomatik context %85 uyarısı
+ * - Spinner, ToolCall, ToolResult, StatsBar, ContextBar
+ * - Plan modu onay akışı
+ * - Alt-ajan derinlik göstergesi
+ * - Otomatik context %80 uyarısı
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Text, useInput, useApp, render, measureElement } from 'ink';
 import * as readline from 'readline';
-import * as path from 'path';
+import { join as pathJoin, resolve as pathResolve } from 'path';
 import { homedir } from 'os';
 import { statSync } from 'fs';
 import type {
@@ -36,7 +33,6 @@ import {
   saveSessionBackup,
   updateSessionMessages,
   loadSession,
-  listSessions,
 } from './storage/session.js';
 import {
   resolveModel,
@@ -46,7 +42,7 @@ import {
   persistProviderAndModel,
   getEffectiveContextBudgetTokens,
 } from './config/settings.js';
-import { executeCommand, parseCommand } from './commands.js';
+import { executeCommand } from './commands.js';
 import type { CommandContext } from './commands.js';
 import {
   renderToolCall,
@@ -69,9 +65,10 @@ import {
   resetPlanModeState,
 } from './plan-mode-state.js';
 import { setSharedAgentContext } from './tools/agent-spawn.js';
-import { VERSION } from './version.js';
+import { writeRecoveryCheckpoint, checkRecovery, clearRecovery } from './session-recovery.js';
+import { generateSessionTitle } from './session-title.js';
 import chalk from 'chalk';
-import { cmd, navyBright, promptBright } from './theme.js';
+import { cmd, promptBright } from './theme.js';
 import { loadHistory, addToHistory, storePaste } from './storage/history.js';
 import { runHistorySearch } from './history-search.js';
 import { runHooks } from './hooks.js';
@@ -115,7 +112,7 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
   // Graceful shutdown kur
   const { setupGracefulShutdown, startBackgroundCleanup } = await import('./lifecycle.js');
   setupGracefulShutdown();
-  void startBackgroundCleanup(path.join(homedir(), '.seth', 'sessions'));
+  void startBackgroundCleanup(pathJoin(homedir(), '.seth', 'sessions'));
 
   // Env doğrulama
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
@@ -146,6 +143,19 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
   const toolExecutor = new ToolExecutor(toolRegistry, appConfig.tools, confirmFn);
 
   let session = createSession(currentProvider, currentModel);
+
+  // #10 Crash recovery kontrolü
+  const recovery = checkRecovery();
+  if (recovery && recovery.messageCount > 0 && recovery.sessionId) {
+    const loaded = loadSession(recovery.sessionId);
+    if (loaded && loaded.messages.length > 0) {
+      const title = recovery.title || loaded.messages[0] && typeof loaded.messages[0].content === 'string'
+        ? (loaded.messages[0].content as string).slice(0, 50)
+        : 'önceki oturum';
+      console.log(chalk.yellow(`\n  ⚡ Kurtarılabilir oturum bulundu: "${title}" (${recovery.messageCount} mesaj)`));
+      console.log(chalk.dim(`  Devam etmek için: /geçmiş ${recovery.sessionId.slice(0, 8)}\n`));
+    }
+  }
   setAgentSessionContext(session.id);
   const laneHistories = { a: [] as ChatMessage[], b: [] as ChatMessage[] };
   let activeLane: 'a' | 'b' = 'a';
@@ -181,6 +191,7 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
   let rl: readline.Interface | null = null;
   let currentAbortController: AbortController | null = null;
   let processing = false;
+  let compactWarned = false; // #5 readonly session'a yazmak yerine ayrı değişken
 
   function getPromptStr(): string {
     const cur = laneHistories[activeLane];
@@ -319,7 +330,7 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
 
     changeCwd: (dir: string) => {
       try {
-        const target = path.resolve(currentCwd, dir);
+        const target = pathResolve(currentCwd, dir);
         statSync(target);
         currentCwd = target;
         process.chdir(target);
@@ -455,6 +466,14 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
     // Cevap ile spinner arasında 1 satır boşluk
     process.stdout.write('\n');
 
+    // #6 İlk mesajda oturum başlığı üret (arka planda)
+    if (laneHistories[activeLane].length === 0 && !(session as { title?: string }).title) {
+      generateSessionTitle(finalInput, provider, currentModel).then(title => {
+        session = { ...session, title } as typeof session;
+        saveSession(session); // başlığı dosyaya kaydet
+      }).catch(() => {});
+    }
+
     startSpinner('Düşünüyor…', true, { thinkingMode: spinOpts.thinkingMode });
 
     let didClearSpinner = false;
@@ -470,6 +489,15 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
 
     try {
       const systemPrompt = buildSystemPrompt(currentCwd);
+      // #18 Otomatik belleği sistem promptuna ekle
+      let fullSystemPrompt = systemPrompt;
+      try {
+        const { loadAutoMemories } = await import('./auto-memory.js');
+        const autoMem = loadAutoMemories(3);
+        if (autoMem.trim()) {
+          fullSystemPrompt += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nOTOMATİK BELLEK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${autoMem}\n`;
+        }
+      } catch { /* otomatik bellek yoksa atla */ }
       const tools = toolsEnabled ? toolRegistry : new ToolRegistry();
       const executor = toolsEnabled ? toolExecutor : new ToolExecutor(tools, appConfig.tools, confirmFn);
 
@@ -484,7 +512,7 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       const result = await runAgentLoop(finalInput, laneHistories[activeLane], {
         provider,
         model: currentModel,
-        systemPrompt,
+        systemPrompt: fullSystemPrompt,
         toolRegistry: tools,
         toolExecutor: executor,
         maxTurns: agentEnabled ? appConfig.agent.maxTurns : 1,
@@ -492,6 +520,7 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
         cwd: currentCwd,
         debug: appConfig.debug,
         abortSignal: currentAbortController.signal,
+        effort: appConfig.effort ?? 'medium',
         // Fallback sağlayıcı — settings.json'da fallbackProvider tanımlıysa
         ...(appConfig.fallbackProvider && appConfig.fallbackProvider !== currentProvider ? {
           fallbackProvider: await createProvider(appConfig.fallbackProvider, appConfig).catch(() => undefined),
@@ -606,14 +635,15 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       totalTurns += result.turns;
       session = updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, result.totalUsage);
       saveSession(session);
+      writeRecoveryCheckpoint(session); // #10 crash recovery
 
       // #14 Otomatik sıkıştırma önerisi — %80 dolunca bir kez uyar
       const newTotalCum = totalUsage.inputTokens + totalUsage.outputTokens;
       const newBudget = getEffectiveContextBudgetTokens(appConfig);
       if (newBudget > 0 && newTotalCum / newBudget >= 0.80) {
-        const alreadyWarned = (session as any)._compactWarned;
+        const alreadyWarned = compactWarned;
         if (!alreadyWarned) {
-          (session as any)._compactWarned = true;
+          compactWarned = true;
           console.log(chalk.yellow('\n  ⚠  Bağlam %80 doldu. /sıkıştır komutuyla token tasarrufu yapabilirsiniz.\n'));
         }
       }
@@ -653,12 +683,35 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
 
   // ─── REPL Loop ────────────────────────────────────────────────────────────────
   function createInterface() {
+    // #7 Tab tamamlama — slash komutları + geçmiş önerileri
+    const completer = (line: string, callback: (err: Error | null, result: [string[], string]) => void) => {
+      const slashCmds = [
+        '/yardım', '/istatistikler', '/bağlam', '/ara', '/oturum-ara', '/doktor',
+        '/güncelle', '/diff', '/sağlayıcı', '/model', '/modeller', '/değiştir',
+        '/hafıza', '/bellek', '/sıkıştır', '/geri', '/temizle', '/kaydet',
+        '/export', '/oturum-export', '/oturum-import', '/geçmiş', '/tema',
+        '/context', '/yetki', '/apikey', '/araçlar', '/ajan', '/cron',
+        '/worktree', '/mcp-keşif', '/yapıştır', '/hook', '/rapor', '/cd', '/pwd',
+        '/effort', '/cikis',
+      ];
+      if (line.startsWith('/')) {
+        const hits = slashCmds.filter(c => c.startsWith(line));
+        return callback(null, [hits.length ? hits : slashCmds, line]);
+      }
+      // Geçmişten öneri — async import
+      import('./prompt-suggestions.js').then(({ getPromptSuggestions }) => {
+        const suggestions = getPromptSuggestions(line);
+        callback(null, [suggestions.length ? suggestions : [], line]);
+      }).catch(() => callback(null, [[], line]));
+    };
+
     rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
       prompt: getPromptStr(),
       terminal: true,
       historySize: 500,
+      completer,
     });
     // Kalıcı geçmişi yükle
     const persistedHistory = loadHistory();
@@ -709,7 +762,6 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
     // Hız bazlı paste algılama değişkenleri (Ctrl+Shift+V için)
     let lastKeypressTime = 0;
     let rapidCharCount = 0;
-    let rapidPasteDetected = false;
     let rapidPasteTimer: NodeJS.Timeout | null = null;
     const RAPID_THRESHOLD_MS = 20;
     const RAPID_MIN_CHARS = 5;
@@ -829,7 +881,6 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
             rapidPasteTimer = null;
             if (rapidCharCount >= RAPID_MIN_CHARS) {
               lastPastedContent = rl?.line ?? '';
-              rapidPasteDetected = false;
             }
             rapidCharCount = 0;
           }, 50);
@@ -993,6 +1044,7 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       }
       console.log(chalk.dim('\n  Kapatılıyor...'));
       saveSession(updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, { inputTokens: 0, outputTokens: 0 }));
+      clearRecovery(); // #10 normal çıkışta recovery temizle
       console.log(chalk.dim(`  Devam etmek için: seth --devam ${session.id}`));
       process.exit(0);
     });

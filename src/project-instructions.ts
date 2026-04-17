@@ -91,10 +91,11 @@ function getCurrentDate(): string {
   return `Bugünün tarihi: ${date}\n\n`;
 }
 
-/** Tam sistem istemi: çekirdek + proje kökü talimatları. */
+/** Tam sistem istemi: çekirdek + proje kökü talimatları + otomatik bellek. */
 export function buildSystemPrompt(cwd: string): string {
   let base = getCurrentDate() + SYSTEM_PROMPT_TR.replace('{{CWD}}', cwd).replace('{{OS_TYPE}}', osTypeLabel());
   base += getGitStatus(cwd);
   const extra = loadProjectInstructionBlock(cwd);
-  return extra ? `${base}${extra}` : base;
+  if (extra) base += extra;
+  return base;
 }

@@ -90,6 +90,14 @@ export async function playIntro(provider: string, model: string, userEmail: stri
     hideCursor();
     process.stdout.write('\x1B[2J\x1B[H');
 
+    // Animasyon sırasında klavye girişini yut — ekrana yazılmasın
+    const discardInput = (data: Buffer) => { /* yut */ };
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.on('data', discardInput);
+    }
+
     let phase: 'letters' | 'snake' | 'done' = 'letters';
     let letterRow = 0;
     let snakeHead = 0;
@@ -120,7 +128,10 @@ export async function playIntro(provider: string, model: string, userEmail: stri
       }
     }
 
-    const sigintHandler = () => { showCursor(); process.stdout.write('\x1B[2J\x1B[H'); process.exit(0); };
+    const sigintHandler = () => {
+      if (process.stdin.isTTY) { process.stdin.removeListener('data', discardInput); process.stdin.setRawMode(false); process.stdin.pause(); }
+      showCursor(); process.stdout.write('\x1B[2J\x1B[H'); process.exit(0);
+    };
     process.once('SIGINT', sigintHandler);
 
     const interval = setInterval(() => {
@@ -176,6 +187,12 @@ export async function playIntro(provider: string, model: string, userEmail: stri
 
             setTimeout(() => {
             process.removeListener('SIGINT', sigintHandler);
+            // stdin'i serbest bırak
+            if (process.stdin.isTTY) {
+              process.stdin.removeListener('data', discardInput);
+              process.stdin.setRawMode(false);
+              process.stdin.pause();
+            }
             resolve();
           }, 1400);
           }, 400);

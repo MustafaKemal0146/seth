@@ -10,6 +10,9 @@ import * as readline from 'readline';
 import chalk from 'chalk';
 import { cmd } from '../theme.js';
 import { logToolMetric } from '../storage/tool-metrics.js';
+import { truncateToolOutput } from '../truncate.js';
+
+const MAX_TOOL_OUTPUT_CHARS = 20_000;
 
 // Tools that are always safe (read-only) and never need confirmation in 'normal' mode.
 const READ_ONLY_TOOLS = new Set([
@@ -103,6 +106,10 @@ export class ToolExecutor {
     // Execute
     try {
       const result = await tool.execute(input, cwd);
+      // #14 Araç sonucu boyut sınırı — büyük çıktılar context'i doldurmasın
+      if (result.output.length > MAX_TOOL_OUTPUT_CHARS) {
+        return finalize({ ...result, output: truncateToolOutput(result.output, MAX_TOOL_OUTPUT_CHARS) });
+      }
       return finalize(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

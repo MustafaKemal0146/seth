@@ -3,7 +3,7 @@
  */
 
 import { join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { homedir } from 'os';
 import type { ChatMessage, LLMProvider, ChatOptions } from './types.js';
 
@@ -73,15 +73,11 @@ Hatırlanacak bilgiler (madde madde):`;
 export function loadAutoMemories(limit = 5): string {
   if (!existsSync(MEMORY_DIR)) return '';
   try {
-    const { readdirSync } = require('fs');
     const files = readdirSync(MEMORY_DIR)
       .filter((f: string) => f.endsWith('.md'))
       .sort()
       .reverse()
       .slice(0, limit);
-    
-    return files
-      .map((f: string) => readFileSync(join(MEMORY_DIR, f), 'utf-8'))
-      .join('\n');
+    return files.map((f: string) => readFileSync(join(MEMORY_DIR, f), 'utf-8')).join('\n');
   } catch { return ''; }
 }

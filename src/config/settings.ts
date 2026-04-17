@@ -50,6 +50,8 @@ const DEFAULT_CONFIG: SETHConfig = {
     deepseek: { apiKey: undefined, model: 'deepseek-chat' },
     xai: { apiKey: undefined, model: 'grok-3-latest' },
     lmstudio: { baseUrl: 'http://localhost:1234', model: 'local-model' },
+    litellm: { baseUrl: 'http://localhost:4000', model: 'gpt-3.5-turbo' },
+    copilot: { baseUrl: 'http://localhost:3000', model: 'gpt-4o' },
   },
   tools: {
     allowedTools: [],
@@ -193,6 +195,8 @@ export function resolveProviderApiKey(provider: ProviderName, config: SETHConfig
     deepseek: 'DEEPSEEK_API_KEY',
     xai: 'XAI_API_KEY',
     lmstudio: '',
+    litellm: 'LITELLM_API_KEY',
+    copilot: '',
   };
 
   const envKey = envMap[provider];

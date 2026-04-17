@@ -6,20 +6,36 @@
 
 <p align="center">
   <strong>Terminalinizde çalışan Türkçe yapay zeka kodlama ve siber güvenlik ajanı.</strong><br/>
-  10 AI sağlayıcısı, 40+ araç, CTF motoru, kalıcı bellek ve çok daha fazlası.
+  11 AI sağlayıcısı, 40+ araç, CTF motoru, kalıcı bellek, crash recovery ve çok daha fazlası.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square&logo=node.js"/>
   <img src="https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript"/>
-  <img src="https://img.shields.io/badge/Version-3.8.1-purple?style=flat-square"/>
+  <img src="https://img.shields.io/badge/Version-3.8.2-purple?style=flat-square"/>
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square"/>
   <img src="https://img.shields.io/badge/Dil-Türkçe-red?style=flat-square"/>
 </p>
 
 ---
 
-## 🚀 Hızlı Başlangıç
+## 🎯 SETH Nedir?
+
+SETH, terminalde çalışan, Türkçe arayüzlü bir yapay zeka kodlama ve siber güvenlik ajanıdır. Tek bir komutla başlar, projenizi analiz eder, kod yazar, test çalıştırır, güvenlik taraması yapar ve raporlar.
+
+**Temel felsefe:** Siz yönlendirin, SETH uygulasın. Araştır → Planla → Uygula döngüsüyle her görevi otonom olarak tamamlar.
+
+**Neden SETH?**
+- 🇹🇷 Tamamen Türkçe arayüz ve komutlar
+- 🔒 Yerel modeller (Ollama, LM Studio) ile %100 gizlilik
+- 🛡️ Siber güvenlik araçları entegrasyonu (nmap, sqlmap, nikto vb.)
+- 🧠 Kalıcı bellek — projelerinizi ve tercihlerinizi hatırlar, oturumlar arası öğrenir
+- ⚡ 12 farklı AI sağlayıcısı — tek komutla geçiş
+- 🔄 Crash recovery — beklenmedik kapanmalarda oturumu kurtarır
+- 📊 Gerçek maliyet takibi — her provider için gerçek token fiyatları
+- ⏰ Effort kontrolü — `low/medium/high/max` ile yanıt derinliği ayarı
+
+---
 
 ```bash
 npm install -g seth
@@ -40,6 +56,8 @@ seth --auto -p "testleri çalıştır"  # Araç onaylarını atla
 |-----------|-------|---------|
 | **Ollama** (Yerel) | `--provider ollama` | Gerekmez |
 | **LM Studio** (Yerel) | `--provider lmstudio` | Gerekmez |
+| **LiteLLM** (100+ Provider) | `--provider litellm` | `LITELLM_API_KEY` |
+| **GitHub Copilot** | `--provider copilot` | Gerekmez (proxy) |
 | **Groq** (Hızlı, Ücretsiz Tier) | `--provider groq` | `GROQ_API_KEY` |
 | **DeepSeek** (Ucuz, Güçlü) | `--provider deepseek` | `DEEPSEEK_API_KEY` |
 | **Mistral** | `--provider mistral` | `MISTRAL_API_KEY` |
@@ -120,7 +138,7 @@ export OPENROUTER_API_KEY=sk-or-xxxxx
 | `/hafıza sil <tip>` | Bellek tipini temizle |
 | `/bellek` | Görev listesi + oturum özeti |
 | `/sıkıştır` | Geçmişi AI ile özetle (token tasarrufu) |
-| `/kaydet [md\|html\|txt]` | Konuşmayı dışa aktar |
+| `/kaydet [md\|html\|txt\|cast]` | Konuşmayı dışa aktar (`cast` = asciinema formatı) |
 | `/export [json\|md\|html]` | Oturumu dışa aktar |
 | `/oturum-export` | Oturumu JSON olarak kaydet |
 | `/oturum-import <dosya>` | Önceki oturumu yükle |
@@ -142,6 +160,7 @@ export OPENROUTER_API_KEY=sk-or-xxxxx
 
 | Komut | Açıklama |
 |--------|-----------|
+| `/effort [low\|medium\|high\|max]` | Düşünme seviyesi — hız/derinlik dengesi |
 | `/cron ekle <isim> <interval> <prompt>` | Periyodik görev ekle (1m/1h/1d) |
 | `/cron liste` | Cron görevlerini listele |
 | `/worktree [list\|add\|remove]` | Git worktree yönetimi |

@@ -74,6 +74,17 @@ export async function createProvider(
       const { OpenAIProvider } = await import('./openai.js');
       return new OpenAIProvider('lm-studio', `${baseUrl}/v1`);
     }
+    case 'litellm': {
+      const baseUrl = config.providers.litellm?.baseUrl ?? 'http://localhost:4000';
+      const apiKey = resolveProviderApiKey('litellm', config) ?? 'litellm';
+      const { OpenAIProvider } = await import('./openai.js');
+      return new OpenAIProvider(apiKey, `${baseUrl}/v1`);
+    }
+    case 'copilot': {
+      const baseUrl = config.providers.copilot?.baseUrl ?? 'http://localhost:3000';
+      const { OpenAIProvider } = await import('./openai.js');
+      return new OpenAIProvider('n/a', `${baseUrl}/v1`);
+    }
     default: {
       throw new ProviderError(`Unknown provider: ${name as string}`, name as string);
     }

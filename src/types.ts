@@ -7,7 +7,7 @@
 // Provider
 // ---------------------------------------------------------------------------
 
-export type ProviderName = 'claude' | 'gemini' | 'openai' | 'ollama' | 'openrouter' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'lmstudio';
+export type ProviderName = 'claude' | 'gemini' | 'openai' | 'ollama' | 'openrouter' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'lmstudio' | 'litellm' | 'copilot';
 
 export interface ProviderCapabilities {
   readonly supportsTools: boolean;
@@ -147,6 +147,12 @@ export interface ToolPermissionConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Effort (Düşünme Seviyesi)
+// ---------------------------------------------------------------------------
+
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+
+// ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
 
@@ -154,6 +160,8 @@ export interface SessionData {
   readonly id: string;
   readonly provider: ProviderName;
   readonly model: string;
+  /** Otomatik üretilen oturum başlığı */
+  readonly title?: string;
   readonly messages: ChatMessage[];
   /** Çift hat: B geçmişi (A = `messages`) */
   readonly messagesLaneB?: ChatMessage[];
@@ -209,6 +217,8 @@ export interface SETHConfig {
   /** Birincil sağlayıcı başarısız olursa kullanılacak yedek sağlayıcı */
   readonly fallbackProvider?: ProviderName;
   readonly fallbackModel?: string;
+  /** Düşünme seviyesi: low=hızlı, medium=dengeli, high=derin, max=maksimum */
+  readonly effort?: EffortLevel;
 }
 
 // ---------------------------------------------------------------------------

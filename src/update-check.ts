@@ -59,7 +59,7 @@ export async function checkForUpdates(): Promise<{ hasUpdate: boolean; latestVer
  * Basit semver karşılaştırması.
  * @returns 1 if a > b, -1 if a < b, 0 if equal
  */
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const aParts = a.split('.').map(Number);
   const bParts = b.split('.').map(Number);
   

@@ -10,10 +10,8 @@ import { createDefaultRegistry, ToolRegistry } from './tools/registry.js';
 import { ToolExecutor } from './tools/executor.js';
 import { runAgentLoop } from './agent/loop.js';
 import { loadConfig, resolveModel, getEffectiveContextBudgetTokens } from './config/settings.js';
-import { renderToolCall, renderToolResult, renderError } from './renderer.js';
 import { buildSystemPrompt } from './project-instructions.js';
 import { setAgentSessionContext } from './session-runtime.js';
-import { sethLog } from './welcome.js';
 import { randomUUID } from 'crypto';
 
 export async function runHeadless(
@@ -26,7 +24,7 @@ export async function runHeadless(
     autoApprove?: boolean;
   } = {},
 ): Promise<void> {
-  sethLog('Headless mod başlatılıyor');
+  // Headless mod başlatılıyor
   const config = loadConfig({
     debug: options.debug ?? false,
   });
@@ -77,7 +75,7 @@ export async function runHeadless(
 
     if (result.finalText && !result.finalText.endsWith('\n')) process.stdout.write('\n');
   } catch (err) {
-    console.error(renderError(err instanceof Error ? err : new Error(String(err))));
+    console.error(`Hata: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }
