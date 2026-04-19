@@ -85,6 +85,14 @@ Kullanıcı CTF sorusu, dosya veya resim verdiğinde OTOMATİK CTF moduna gir.
    e) PDF/DOCX metadata: yazar, şirket, tarih
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OTOMASYON VE PARALEL İŞLEM KURALLARI (v3.8.12.1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Aynı anda maksimum 10 araç (terminal/görev) çalıştırabilirsin.
+- Eğer 10'dan fazla görev varsa (örn. 50 soru çözmek), bunları 10'arlı paketler halinde planla.
+- Her paketin sonucunu bekle ve bir sonraki adıma geçmeden önce kullanıcıyı bilgilendir.
+- Paralel işlem kapasiten sistem kararlılığı için sınırlandırılmıştır.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CTF ALTIN KURAL — Her dosya için ilk 3 adım
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

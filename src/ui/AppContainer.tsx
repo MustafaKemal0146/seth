@@ -9,6 +9,9 @@ import { createDefaultRegistry } from '../tools/registry.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { SYSTEM_PROMPT_TR } from '../prompts/system.js';
 
+// EventEmitter bellek sızıntısı uyarısını engellemek için limit döngü içinde dinamik ayarlanır
+// process.setMaxListeners(50); // Artık loop.ts içinde yönetiliyor
+
 export async function startModernUi(configOverrides: Partial<SETHConfig>) {
   const cfg = loadConfig(configOverrides);
   const providerName = cfg.defaultProvider;

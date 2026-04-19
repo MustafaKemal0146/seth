@@ -187,44 +187,57 @@ export async function runAgentLoop(
       break;
     }
 
-    // Execute tools in parallel (same-turn bağımsız çağrılar)
-    const executed = await Promise.all(toolUseBlocks.map(async (toolBlock) => {
-      if (options.onToolCall) options.onToolCall(toolBlock.name, toolBlock.input);
+    // [v3.8.12.1] Execute tools in chunks of 10 to prevent EventEmitter leak and performance issues
+    const executed = [];
+    const MAX_CONCURRENT = 10;
 
-      // #1 Loop detection — araç çağrısı döngüsü kontrolü
-      const loopResult = loopDetector.checkToolCall(toolBlock.name, toolBlock.input);
-      if (loopResult.isLoop) {
-        if (options.onText) options.onText(`\n⚠️ Döngü tespit edildi: ${loopResult.detail}\n`);
-        return {
-          toolBlock,
-          result: { output: `[DÖNGÜ TESPİT EDİLDİ] ${loopResult.detail} — Araç çağrısı durduruldu.`, isError: true },
-          record: { toolName: toolBlock.name, input: toolBlock.input, output: '', durationMs: 0, isError: true },
-        };
-      }
+    for (let i = 0; i < toolUseBlocks.length; i += MAX_CONCURRENT) {
+      const chunk = toolUseBlocks.slice(i, i + MAX_CONCURRENT);
+      
+      // Dinamik dinleyici ayarı (Max 50 veya aktif görev sayısı + 20)
+      const currentListeners = process.rawListeners('SIGINT').length;
+      process.setMaxListeners(Math.max(50, currentListeners + chunk.length + 5));
 
-      if (toolBlock.name === 'sethEngine') {
-        const saat = new Date().toLocaleTimeString('tr-TR');
-        const hedef = String(toolBlock.input?.target || 'BILINMEYEN_HEDEF');
-        const vektor = String(toolBlock.input?.action || 'BILINMEYEN_VEKTOR');
-        
-        // Log to console in specific format
-        console.log(`\n\x1b[31m[!] SETH: [${saat}] - [${hedef}] - [OTONOM ANALIZ DEVAM EDIYOR] - [${vektor.toUpperCase()} BAŞLATILDI]\x1b[0m\n`);
-      }
+      const chunkResults = await Promise.all(chunk.map(async (toolBlock) => {
+        if (options.onToolCall) options.onToolCall(toolBlock.name, toolBlock.input);
 
-      if (options.debug) {
-        process.stderr.write(`[debug] Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input).slice(0, 200)})\n`);
-      }
+        // #1 Loop detection — araç çağrısı döngüsü kontrolü
+        const loopResult = loopDetector.checkToolCall(toolBlock.name, toolBlock.input);
+        if (loopResult.isLoop) {
+          if (options.onText) options.onText(`\n⚠️ Döngü tespit edildi: ${loopResult.detail}\n`);
+          return {
+            toolBlock,
+            result: { output: `[DÖNGÜ TESPİT EDİLDİ] ${loopResult.detail} — Araç çağrısı durduruldu.`, isError: true },
+            record: { toolName: toolBlock.name, input: toolBlock.input, output: '', durationMs: 0, isError: true },
+          };
+        }
 
-      const { result, record } = await options.toolExecutor.execute(
-        toolBlock.name,
-        toolBlock.input,
-        options.cwd,
-      );
+        if (toolBlock.name === 'sethEngine') {
+          const saat = new Date().toLocaleTimeString('tr-TR');
+          const hedef = String(toolBlock.input?.target || 'BILINMEYEN_HEDEF');
+          const vektor = String(toolBlock.input?.action || 'BILINMEYEN_VEKTOR');
+          
+          // Log to console in specific format
+          console.log(`\n\x1b[31m[!] SETH: [${saat}] - [${hedef}] - [OTONOM ANALIZ DEVAM EDIYOR] - [${vektor.toUpperCase()} BAŞLATILDI]\x1b[0m\n`);
+        }
 
-      if (options.onToolResult) options.onToolResult(toolBlock.name, result.output, result.isError ?? false, result.data);
+        if (options.debug) {
+          process.stderr.write(`[debug] Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input).slice(0, 200)})\n`);
+        }
 
-      return { toolBlock, result, record };
-    }));
+        const { result, record } = await options.toolExecutor.execute(
+          toolBlock.name,
+          toolBlock.input,
+          options.cwd,
+        );
+
+        if (options.onToolResult) options.onToolResult(toolBlock.name, result.output, result.isError ?? false, result.data);
+
+        return { toolBlock, result, record };
+      }));
+      
+      executed.push(...chunkResults);
+    }
 
     const toolResults: ContentBlock[] = [];
     for (const item of executed) {
