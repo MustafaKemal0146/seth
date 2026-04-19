@@ -705,11 +705,15 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
     } catch (err: any) {
       clearSpin();
       if (err?.name === 'AbortError' || err?.message?.includes('aborted')) {
-        console.log(chalk.red.bold('\n  ⚡ SETH: İşlem kullanıcı tarafından iptal edildi.\n'));
+        // Esc handler zaten mesaj ve prompt verdi, tekrar verme
+        if (processing) {
+          console.log(chalk.red.bold('\n  ⚡ SETH: İşlem kullanıcı tarafından iptal edildi.\n'));
+        }
       } else {
         console.error(renderError(err instanceof Error ? err : new Error(String(err))));
       }
     } finally {
+      const wasAbortedByEsc = !processing; // Esc handler processing=false yaptıysa true
       currentAbortController = null;
       processing = false;
       resetPlanModeState();
@@ -721,7 +725,7 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       if (parseFloat(elapsed) > 30) {
         process.stdout.write(`\n${chalk.green(`  ✓ Tamamlandı (${elapsed}s)`)}\n`);
       }
-      if (rl) {
+      if (rl && !wasAbortedByEsc) {
         rl.setPrompt(getPromptStr());
         rl.prompt();
       }
@@ -957,8 +961,10 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       if (key?.name === 'escape') {
         if (processing && currentAbortController) {
           currentAbortController.abort();
+          currentAbortController = null;
+          clearSpinner();
           process.stdout.write(chalk.red('\n  ⚡ Durduruldu (Esc)\n'));
-          processing = false; // Hemen işareti sıfırla
+          processing = false;
           if (rl) { rl.setPrompt(getPromptStr()); rl.prompt(); }
           return;
         }
