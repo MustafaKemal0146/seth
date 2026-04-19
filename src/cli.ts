@@ -99,8 +99,8 @@ async function main(): Promise<void> {
     const { playIntro } = await import('./intro.js');
     await playIntro(cfg.defaultProvider, resolveModel(cfg.defaultProvider, cfg, modelArg), '');
 
-    const { startRepl } = await import('./repl.js');
-    await startRepl(configOverrides, true, resumeId, '');
+    const { startModernUi } = await import('./ui/AppContainer.js');
+    await startModernUi(configOverrides);
   }
 }
 
