@@ -181,7 +181,7 @@ export async function playIntro(provider: string, model: string, userEmail: stri
             if (_updateMessage) {
               moveTo(base + 5, LEFT); process.stdout.write(`\x1b[33m${_updateMessage}\x1b[0m`);
             }
-            // imleci bilgi satırlarının altına taşı
+            // imleci bilgi satırlarının altına 1 satır boşluk bırakarak taşı
             moveTo(base + 6, 0);
             showCursor();
 

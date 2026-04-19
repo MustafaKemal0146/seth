@@ -16,8 +16,8 @@ import { homedir } from 'os';
 // ─── version ────────────────────────────────────────────────────────────────
 
 describe('version', () => {
-  it('sürüm 3.8.10 olmalı', () => {
-    expect(VERSION).toBe('3.8.10');
+  it('sürüm 3.8.12 olmalı', () => {
+    expect(VERSION).toBe('3.8.12');
   });
 });
 
