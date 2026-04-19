@@ -12,8 +12,12 @@ function renderContent(content: string | ContentBlock[]) {
     return content;
   }
   return content
-    .filter(b => b.type === 'text')
-    .map(b => (b as { text: string }).text)
+    .filter(b => b.type === 'text' || b.type === 'tool_result')
+    .map(b => {
+      if (b.type === 'text') return b.text;
+      if (b.type === 'tool_result') return `\n[ARAÇ ÇIKTISI]:\n${b.content}\n`;
+      return '';
+    })
     .join('');
 }
 
@@ -24,6 +28,7 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   const borderColor = isUser ? 'blue' : 'green';
 
   const text = renderContent(message.content);
+  if (!text && !isStreaming) return null;
 
   if (message.role === 'system') return null;
 

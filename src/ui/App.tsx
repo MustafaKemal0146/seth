@@ -5,15 +5,6 @@ import { ChatMessage } from './ChatMessage.js';
 import { InputComposer } from './InputComposer.js';
 import { Spinner, ToolCallDisplay } from './components.js';
 
-const SETH_ART = [
-  ' ███████╗███████╗████████╗██╗  ██╗',
-  ' ██╔════╝██╔════╝╚══██╔══╝██║  ██║',
-  ' ███████╗█████╗     ██║   ███████║',
-  ' ╚════██║██╔══╝     ██║   ██╔══██║',
-  ' ███████║███████╗   ██║   ██║  ██║',
-  ' ╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═╝',
-];
-
 export interface AppProps {
   agentOptions: UseSethAgentOptions;
 }
@@ -30,17 +21,8 @@ export function App({ agentOptions }: AppProps) {
 
   return (
     <Box flexDirection="column" padding={1}>
-      {/* Header Art */}
-      <Box flexDirection="column" marginBottom={2}>
-        {SETH_ART.map((line, i) => (
-          <Text key={i} color="red" bold>{line}</Text>
-        ))}
-        <Text color="red" dimColor>  HİÇBİR SİSTEM GÜVENLİ DEĞİLDİR</Text>
-        <Box marginTop={1}>
-          <Text color="blue">  ✦ {agentOptions.provider.name}/{agentOptions.model}</Text>
-        </Box>
-      </Box>
-
+      {/* Logo artık intro.ts tarafından hallediliyor, burada tekrar etmiyoruz */}
+      
       {/* Mesaj Geçmişi */}
       {history.map((msg, i) => (
         <ChatMessage key={i} message={msg} />
