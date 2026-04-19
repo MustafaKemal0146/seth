@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square&logo=node.js"/>
+  <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js"/>
   <img src="https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript"/>
   <img src="https://img.shields.io/badge/Version-3.8.3-purple?style=flat-square"/>
   <img src="https://img.shields.io/badge/License-AGPL_v3-blue?style=flat-square"/>
@@ -286,7 +286,7 @@ src/
 
 ## 📋 Gereksinimler
 
-- **Node.js** >= 18
+- **Node.js** >= 20
 - En az bir AI sağlayıcısı (Ollama ücretsiz ve yerel)
 - **İsteğe bağlı:** `rg` (ripgrep) — hızlı arama için
 - **İsteğe bağlı:** `nmap`, `sqlmap`, `nikto` vb. — siber güvenlik araçları
