@@ -8,6 +8,9 @@ import { ToolRegistry } from '../tools/registry.js';
 import { BudgetExceededError } from '../core/errors.js';
 import { ThinkingFilter } from '../thinking-filter.js';
 
+// Helper to let the event loop breathe
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export interface AgentLoopOptions {
   provider: LLMProvider;
   model: string;
@@ -187,21 +190,21 @@ export async function runAgentLoop(
       break;
     }
 
-    // [v3.8.12.1] Execute tools in chunks of 10 to prevent EventEmitter leak and performance issues
+    // [v3.8.12.2] Execute tools in smaller chunks of 5 for better UI responsiveness
     const executed = [];
-    const MAX_CONCURRENT = 10;
+    const MAX_CONCURRENT = 5;
 
     for (let i = 0; i < toolUseBlocks.length; i += MAX_CONCURRENT) {
       const chunk = toolUseBlocks.slice(i, i + MAX_CONCURRENT);
       
-      // Dinamik dinleyici ayarı (Max 50 veya aktif görev sayısı + 20)
+      // Dinamik dinleyici ayarı
       const currentListeners = process.rawListeners('SIGINT').length;
       process.setMaxListeners(Math.max(50, currentListeners + chunk.length + 5));
 
       const chunkResults = await Promise.all(chunk.map(async (toolBlock) => {
         if (options.onToolCall) options.onToolCall(toolBlock.name, toolBlock.input);
 
-        // #1 Loop detection — araç çağrısı döngüsü kontrolü
+        // #1 Loop detection
         const loopResult = loopDetector.checkToolCall(toolBlock.name, toolBlock.input);
         if (loopResult.isLoop) {
           if (options.onText) options.onText(`\n⚠️ Döngü tespit edildi: ${loopResult.detail}\n`);
@@ -216,13 +219,7 @@ export async function runAgentLoop(
           const saat = new Date().toLocaleTimeString('tr-TR');
           const hedef = String(toolBlock.input?.target || 'BILINMEYEN_HEDEF');
           const vektor = String(toolBlock.input?.action || 'BILINMEYEN_VEKTOR');
-          
-          // Log to console in specific format
           console.log(`\n\x1b[31m[!] SETH: [${saat}] - [${hedef}] - [OTONOM ANALIZ DEVAM EDIYOR] - [${vektor.toUpperCase()} BAŞLATILDI]\x1b[0m\n`);
-        }
-
-        if (options.debug) {
-          process.stderr.write(`[debug] Tool call: ${toolBlock.name}(${JSON.stringify(toolBlock.input).slice(0, 200)})\n`);
         }
 
         const { result, record } = await options.toolExecutor.execute(
@@ -237,6 +234,11 @@ export async function runAgentLoop(
       }));
       
       executed.push(...chunkResults);
+
+      // Paketler arası minik bir nefes payı (50ms) - UI'ın güncellenmesi için
+      if (i + MAX_CONCURRENT < toolUseBlocks.length) {
+        await delay(50);
+      }
     }
 
     const toolResults: ContentBlock[] = [];
