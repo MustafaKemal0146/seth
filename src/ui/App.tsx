@@ -3,7 +3,7 @@ import { Box, Text, Static } from 'ink';
 import { useSethAgent, type UseSethAgentOptions } from './hooks/useSethAgent.js';
 import { ChatMessage } from './ChatMessage.js';
 import { InputComposer } from './InputComposer.js';
-import { Spinner, ToolCallDisplay } from './components.js';
+import { Spinner } from './components.js';
 import type { ChatMessage as MessageType } from '../types.js';
 
 export interface AppProps {
@@ -26,8 +26,9 @@ export function App({ agentOptions }: AppProps) {
     abort,
   } = useSethAgent(agentOptions);
 
-  // Sadece mesajları statik olarak render ediyoruz. 
-  // Logo ve giriş bilgileri zaten intro.ts tarafından terminale basıldı.
+  // Sadece mesajları statik olarak render ediyoruz.
+  // Logo ve giriş bilgileri zaten intro.ts tarafından (cli.ts içinde) basıldı.
+  // Ink bunları tekrar basmamalı, aksi halde duplicate olur.
   const staticItems: StaticItem[] = history.map((msg, i) => ({ 
     type: 'message', 
     id: `msg-${i}`, 
@@ -35,19 +36,17 @@ export function App({ agentOptions }: AppProps) {
   } as StaticItem));
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" paddingX={0}>
       {/* 
-        Static Render: Sadece bitmiş mesajlar.
-        Yeni mesaj geldikçe buraya eklenir ve terminale bir kez basılır.
+        Static Render: Bitmiş mesajlar.
+        İşlem tamamlandıkça buraya düşer ve terminale bir kez basılır.
       */}
       <Static items={staticItems}>
         {(item) => <ChatMessage key={item.id} message={item.message} />}
       </Static>
 
-      {/* 
-        Dinamik Alan: Mevcut işlem durumu ve yeni mesaj girişi.
-      */}
-      <Box flexDirection="column">
+      {/* Dinamik Alan: Sadece en altta güncellenen kısımlar */}
+      <Box flexDirection="column" paddingLeft={1}>
         {/* Canlı Akış (Streaming) */}
         {streamingText && (
           <ChatMessage 
@@ -56,9 +55,13 @@ export function App({ agentOptions }: AppProps) {
           />
         )}
 
-        {/* Tool Çağrısı */}
+        {/* Tool Çağrısı - Sade terminal log stili */}
         {currentTool && (
-          <ToolCallDisplay name={currentTool.name} detail={JSON.stringify(currentTool.input)} />
+          <Box marginLeft={2} marginBottom={1}>
+            <Text color="yellow">⏺ </Text>
+            <Text bold>{currentTool.name}</Text>
+            <Text dimColor> · {JSON.stringify(currentTool.input).slice(0, 100)}...</Text>
+          </Box>
         )}
 
         {/* İşlem Yapılıyor Spinner */}
@@ -69,7 +72,7 @@ export function App({ agentOptions }: AppProps) {
         )}
 
         {/* Input Alanı */}
-        <Box marginTop={history.length > 0 ? 1 : 0}>
+        <Box>
           <InputComposer 
             onSend={sendMessage} 
             isProcessing={isProcessing} 

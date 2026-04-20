@@ -713,21 +713,27 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
         console.error(renderError(err instanceof Error ? err : new Error(String(err))));
       }
     } finally {
-      const wasAbortedByEsc = !processing; // Esc handler processing=false yaptıysa true
+      const wasAbortedByEsc = !processing;
       currentAbortController = null;
       processing = false;
       resetPlanModeState();
-      // Terminal başlığını geri yükle + süre bildirimi
+      
+      // Terminal başlığını geri yükle
       const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
       const titleIcon = parseFloat(elapsed) > 10 ? '✓' : '●';
       process.stdout.write(`\x1b]0;${titleIcon} SETH — ${elapsed}s\x07`);
-      // 30 saniyeden uzun işlemlerde görünür bildirim
+
+      // Eğer 30 saniyeden uzun sürdüyse bildir
       if (parseFloat(elapsed) > 30) {
         process.stdout.write(`\n${chalk.green(`  ✓ Tamamlandı (${elapsed}s)`)}\n`);
       }
+
+      // ─── Çakışma Önleyici: Satırı temizle ve tekil prompt ver ────────────────
       if (rl && !wasAbortedByEsc) {
+        // İmleci satır başına al ve o satırı tamamen temizle
+        process.stdout.write('\r\x1b[K');
         rl.setPrompt(getPromptStr());
-        rl.prompt();
+        rl.prompt(true);
       }
     }
   }
@@ -911,14 +917,25 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
         const pasted = pasteBuffer;
         pasteBuffer = '';
         if (!pasted.trim()) return;
-        // Newline'ları boşlukla değiştir — line event tetiklenmesin
-        // Çok satırlı paste'i tek satır olarak yaz
-        const singleLine = pasted.replace(/\r\n/g, ' ').replace(/\r/g, ' ').replace(/\n/g, ' ').trim();
+
+        const lines = pasted.split(/\r\n|\r|\n/);
         lastPastedContent = pasted; // Orijinali sakla (Ctrl+O için)
+
         if (rl) {
-          // Mevcut input'u temizle, paste'i yaz
-          rl.write(null, { ctrl: true, name: 'u' }); // satırı temizle
-          rl.write(singleLine);
+          // Satırı temizle
+          rl.write(null, { ctrl: true, name: 'u' });
+
+          if (lines.length > 3) {
+            // Çok satırlı paste özetini göster
+            const summary = `[YAPIŞTIRILDI: ${lines.length} Satır / ${pasted.length} Karakter]`;
+            rl.write(summary);
+            // Gerçek içeriği arka planda multilineBuffer'a hazırla veya line event'te yönet
+            // Şimdilik sadece özeti yazıyoruz, kullanıcı Enter bastığında lastPastedContent kullanılacak
+          } else {
+            // Kısa paste, newline'ları boşluk yapıp yaz
+            const singleLine = pasted.replace(/\r\n|\r|\n/g, ' ').trim();
+            rl.write(singleLine);
+          }
         }
         return;
       }
@@ -1034,9 +1051,16 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       if (lineTimer) clearTimeout(lineTimer);
       lineTimer = setTimeout(async () => {
         if (processing) return;
-        const finalInput = multilineBuffer + bufferedLines.join('\n');
+        
+        let finalInput = multilineBuffer + bufferedLines.join('\n');
         bufferedLines = []; multilineBuffer = '';
-        if (!finalInput.trim()) { if (rl) rl.prompt(); return; }
+
+        // Özetlenmiş paste algıla ve gerçek içerikle değiştir
+        if (finalInput.includes('[YAPIŞTIRILDI:') && lastPastedContent) {
+          finalInput = lastPastedContent;
+        }
+
+        if (!finalInput.trim()) { if (rl) rl.prompt(true); return; }
 
         if (finalInput.trim().startsWith('/')) {
           // ─── Format Command Input Display ──────────────────────────────────

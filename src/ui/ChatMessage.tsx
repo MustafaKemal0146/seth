@@ -6,15 +6,15 @@ import type { ChatMessage as MessageType, ContentBlock } from '../types.js';
 
 // Markdown ayarları: Sadece stil ver, yapısal kutulama yapma
 const renderer = new (TerminalRenderer as any)({
-  firstHeading: (s: string) => `\x1b[1;31m${s}\x1b[0m`, 
-  heading: (s: string) => `\x1b[1;31m${s}\x1b[0m`,
+  firstHeading: (s: string) => `\n\x1b[1;31m${s}\x1b[0m\n`, 
+  heading: (s: string) => `\n\x1b[1;31m${s}\x1b[0m\n`,
   strong: (s: string) => `\x1b[1m${s}\x1b[22m`,       
   em: (s: string) => `\x1b[3m${s}\x1b[23m`,           
   codespan: (s: string) => `\x1b[33m${s}\x1b[39m`,    
-  table: (s: string) => `\x1b[37m${s}\x1b[39m`,       
-  listitem: (s: string) => `\x1b[31m•\x1b[0m \x1b[37m${s}\x1b[39m`,
-  reflowText: false, // Tablo ve hizalamayı bozmaması için kapalı
-  width: 76,
+  table: (s: string) => `\n\x1b[37m${s}\x1b[39m\n`,       
+  listitem: (s: string) => `  \x1b[31m•\x1b[0m \x1b[37m${s}\x1b[39m`,
+  reflowText: false,
+  width: 80,
 });
 
 marked.setOptions({ renderer });
@@ -33,13 +33,15 @@ function renderContent(content: string | ContentBlock[]): string {
       .filter(b => b.type === 'text' || b.type === 'tool_result')
       .map(b => {
         if (b.type === 'text') return b.text;
-        if (b.type === 'tool_result') return `\n\x1b[1;31m[ARAÇ ÇIKTISI]:\x1b[0m\n${b.content}\n`;
+        if (b.type === 'tool_result') {
+          // Tool sonuçlarını terminal log stiliyle gösteriyoruz
+          return `\n\x1b[90m[!] ARAÇ ÇIKTISI:\x1b[0m\n${b.content}\n`;
+        }
         return '';
       })
       .join('');
   }
 
-  // Markdown'u temizle ve ANSI'ye çevir
   const cleanedText = rawText.split('\n').map(l => l.trimEnd()).join('\n').trim();
   
   try {
@@ -51,34 +53,29 @@ function renderContent(content: string | ContentBlock[]): string {
 
 export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   const isUser = message.role === 'user';
-  const roleLabel = isUser ? ' KULLANICI ' : ' SETH ';
-  
-  const borderColor = isUser ? 'gray' : 'red';
-  const labelBg = isUser ? 'white' : 'red';
-  const labelText = isUser ? 'black' : 'white';
+  const roleLabel = isUser ? ' > ' : ' ≻ ';
+  const roleName = isUser ? 'KULLANICI' : 'SETH';
+  const roleColor = isUser ? 'cyan' : 'red';
 
   const formattedText = renderContent(message.content);
   if (!formattedText && !isStreaming) return null;
 
   if (message.role === 'system') return null;
 
+  // Sade Terminal Tasarımı (Kutu Yok)
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Box paddingLeft={1}>
-        <Text bold color={labelText} backgroundColor={labelBg}>
-          {roleLabel}
-        </Text>
+      <Box>
+        <Text bold color={roleColor}>{roleName}</Text>
+        <Text color="gray">{roleLabel}</Text>
+        {isUser && <Text color="white">{formattedText}</Text>}
       </Box>
-      <Box 
-        borderStyle="round" 
-        borderColor={borderColor} 
-        paddingX={1}
-        flexDirection="column"
-        minWidth={20} // Çok daralmasın
-      >
-        <Text color="white">{formattedText}</Text>
-        {isStreaming && <Text color="red">▋</Text>}
-      </Box>
+      {!isUser && (
+        <Box paddingLeft={2} flexDirection="column">
+          <Text color="white">{formattedText}</Text>
+          {isStreaming && <Text color="red">▋</Text>}
+        </Box>
+      )}
     </Box>
   );
 }
