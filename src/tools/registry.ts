@@ -4,6 +4,9 @@
 
 import type { ToolDefinition, ToolSchema } from '../types.js';
 import { kayitliAraclariKaydet } from '../session-runtime.js';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
+import type { SETHConfig, SecurityProfile } from '../types.js';
 
 /** arac_ara aracı için güncel araç adı + açıklama özetini yazar. */
 export function snapshotToolRegistry(registry: ToolRegistry): void {
@@ -58,7 +61,7 @@ export class ToolRegistry {
 }
 
 /** Create and populate a registry with the default built-in tools. */
-export async function createDefaultRegistry(): Promise<ToolRegistry> {
+export async function createDefaultRegistry(config?: SETHConfig): Promise<ToolRegistry> {
   const registry = new ToolRegistry();
 
   const { shellTool } = await import('./shell.js');
@@ -180,24 +183,8 @@ export async function createDefaultRegistry(): Promise<ToolRegistry> {
   registry.register(ctfAutoTool);
   registry.register(shodanTool);
 
-  // v3.8.17: Plugin Sistemi — ~/.seth/plugins/ dizininden araç yükleme
-  try {
-    const { existsSync, readdirSync, mkdirSync } = await import('fs');
-    const { join } = await import('path');
-    const { homedir } = await import('os');
-    const pluginDir = join(homedir(), '.seth', 'plugins');
-    if (!existsSync(pluginDir)) mkdirSync(pluginDir, { recursive: true });
-    
-    const files = readdirSync(pluginDir).filter(f => f.endsWith('.js'));
-    for (const file of files) {
-      try {
-        const plugin = await import(join(pluginDir, file));
-        if (plugin.default && typeof plugin.default.execute === 'function') {
-          registry.register(plugin.default);
-        }
-      } catch { /* ignore invalid plugin */ }
-    }
-  } catch { /* ignore fs errors */ }
+  // Plugin Sistemi — manifest + izin deklarasyonu + SHA256 doğrulama
+  await loadSecurePlugins(registry, config);
 
   // Arka plan görev araçları
   const { taskCreateTool, taskListTool, taskGetTool, taskStopTool } = await import('./background-tasks.js');
@@ -208,4 +195,113 @@ export async function createDefaultRegistry(): Promise<ToolRegistry> {
 
   snapshotToolRegistry(registry);
   return registry;
+}
+
+interface PluginManifest {
+  readonly name: string;
+  readonly main: string;
+  readonly permissions: readonly string[];
+  readonly sha256: string;
+}
+
+const PLUGIN_PERMISSIONS = new Set(['read_fs', 'write_fs', 'network', 'exec']);
+const PROFILE_PLUGIN_PERMISSIONS: Record<SecurityProfile, Set<string>> = {
+  safe: new Set(['read_fs']),
+  standard: new Set(['read_fs', 'write_fs']),
+  pentest: new Set(['read_fs', 'write_fs', 'network', 'exec']),
+};
+
+function pluginReject(file: string, reason: string): void {
+  process.stderr.write(`[seth:plugin] ${file} reddedildi: ${reason}\n`);
+}
+
+function sha256File(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function parsePluginManifest(path: string): PluginManifest {
+  const raw = JSON.parse(readFileSync(path, 'utf-8')) as Partial<PluginManifest>;
+  if (!raw.name || typeof raw.name !== 'string') throw new Error('manifest.name zorunlu');
+  if (!raw.main || typeof raw.main !== 'string') throw new Error('manifest.main zorunlu');
+  if (!Array.isArray(raw.permissions)) throw new Error('manifest.permissions dizi olmalı');
+  if (!raw.sha256 || typeof raw.sha256 !== 'string') throw new Error('manifest.sha256 zorunlu');
+  return {
+    name: raw.name,
+    main: raw.main,
+    permissions: raw.permissions,
+    sha256: raw.sha256.toLowerCase(),
+  };
+}
+
+async function loadSecurePlugins(registry: ToolRegistry, config?: SETHConfig): Promise<void> {
+  const { existsSync, readdirSync, mkdirSync } = await import('fs');
+  const { join } = await import('path');
+  const { homedir } = await import('os');
+  const { pathToFileURL } = await import('url');
+  const { loadConfig } = await import('../config/settings.js');
+
+  const effectiveConfig = config ?? loadConfig();
+  const profile = effectiveConfig.tools.securityProfile ?? 'standard';
+  const allowedPermissions = PROFILE_PLUGIN_PERMISSIONS[profile];
+
+  const pluginDir = join(homedir(), '.seth', 'plugins');
+  if (!existsSync(pluginDir)) mkdirSync(pluginDir, { recursive: true });
+
+  const files = readdirSync(pluginDir).filter((f) => f.endsWith('.js')).sort();
+  for (const file of files) {
+    const pluginPath = join(pluginDir, file);
+    const manifestPath = join(pluginDir, `${file.replace(/\.js$/, '')}.manifest.json`);
+
+    if (!existsSync(manifestPath)) {
+      pluginReject(file, 'manifest dosyası yok (örn: <plugin>.manifest.json)');
+      continue;
+    }
+
+    let manifest: PluginManifest;
+    try {
+      manifest = parsePluginManifest(manifestPath);
+    } catch (err) {
+      pluginReject(file, `manifest geçersiz: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    if (manifest.main !== file) {
+      pluginReject(file, `manifest.main "${manifest.main}" dosya adıyla eşleşmiyor`);
+      continue;
+    }
+
+    const invalidPerm = manifest.permissions.find((p) => !PLUGIN_PERMISSIONS.has(p));
+    if (invalidPerm) {
+      pluginReject(file, `tanımsız permission: ${invalidPerm}`);
+      continue;
+    }
+
+    const disallowedPerm = manifest.permissions.find((p) => !allowedPermissions.has(p));
+    if (disallowedPerm) {
+      pluginReject(file, `"${profile}" profilinde izin verilmeyen permission: ${disallowedPerm}`);
+      continue;
+    }
+
+    const actualHash = sha256File(pluginPath);
+    if (actualHash !== manifest.sha256) {
+      pluginReject(file, `SHA256 uyuşmuyor (beklenen=${manifest.sha256}, bulunan=${actualHash})`);
+      continue;
+    }
+
+    try {
+      const pluginModule = await import(pathToFileURL(pluginPath).href);
+      const tool = pluginModule.default as Partial<ToolDefinition> | undefined;
+      if (!tool || typeof tool.execute !== 'function' || typeof tool.name !== 'string') {
+        pluginReject(file, 'default export geçerli bir ToolDefinition değil');
+        continue;
+      }
+      if (tool.name !== manifest.name) {
+        pluginReject(file, `araç adı manifest ile uyuşmuyor (tool=${tool.name}, manifest=${manifest.name})`);
+        continue;
+      }
+      registry.register(tool as ToolDefinition);
+    } catch (err) {
+      pluginReject(file, `yükleme hatası: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }

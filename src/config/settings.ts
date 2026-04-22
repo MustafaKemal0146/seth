@@ -58,6 +58,7 @@ const DEFAULT_CONFIG: SETHConfig = {
     deniedTools: [],
     deniedPatterns: [],
     requireConfirmation: true,
+    securityProfile: 'standard',
   },
   agent: {
     maxTurns: 25,

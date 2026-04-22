@@ -66,7 +66,7 @@ export const shodanTool: ToolDefinition = {
           url = `${baseUrl}/shodan/ports?${params.toString()}`;
           break;
         case 'watch':
-          return { output: 'v3.8.17: Shodan Watch (Streaming) aktif edildi. Alert API üzerinden ağınızdaki değişiklikleri izler.', isError: false };
+          return { output: 'v3.8.18: Shodan Watch (Streaming) aktif edildi. Alert API üzerinden ağınızdaki değişiklikleri izler.', isError: false };
         default:
           return { output: `Hata: Bilinmeyen işlem "${action}"`, isError: true };
       }

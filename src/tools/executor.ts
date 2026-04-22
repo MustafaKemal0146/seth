@@ -2,7 +2,14 @@
  * @fileoverview Tool executor — validates input, checks permissions, executes.
  */
 
-import type { ToolDefinition, ToolResult, ToolPermissionConfig, ToolCallRecord, PermissionLevel } from '../types.js';
+import type {
+  ToolDefinition,
+  ToolResult,
+  ToolPermissionConfig,
+  ToolCallRecord,
+  PermissionLevel,
+  SecurityProfile,
+} from '../types.js';
 import type { ToolRegistry } from './registry.js';
 import { isToolAllowed } from './permission.js';
 import { EXTERNAL_TIMEOUT_OUTPUT_FRAGMENT } from './external-tool.js';
@@ -38,7 +45,7 @@ export class ToolExecutor {
 
   constructor(
     private readonly registry: ToolRegistry,
-    private readonly permissionConfig: ToolPermissionConfig,
+    private permissionConfig: ToolPermissionConfig,
     private readonly confirmFn?: (message: string) => Promise<boolean>,
   ) {}
 
@@ -50,6 +57,10 @@ export class ToolExecutor {
   }
 
   getPermissionLevel(): PermissionLevel { return this.permissionLevel; }
+  getSecurityProfile(): SecurityProfile { return this.permissionConfig.securityProfile ?? 'standard'; }
+  setSecurityProfile(profile: SecurityProfile): void {
+    this.permissionConfig = { ...this.permissionConfig, securityProfile: profile };
+  }
 
   /** Whitelist a tool so it will never prompt again in this session. */
   whitelistTool(name: string): void { this.whitelistedTools.add(name); }

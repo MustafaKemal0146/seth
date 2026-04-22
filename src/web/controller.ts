@@ -1,4 +1,4 @@
-import { WebSocket, WebSocketServer } from 'ws';
+import { type WebSocket as WS, WebSocketServer } from 'ws';
 import type { ChatMessage } from '../types.js';
 
 export interface WebUIEvent {
@@ -26,7 +26,7 @@ class WebUIController {
     this.wss = wss;
     
     // Yeni bir client bağlandığında mevcut durumu gönder (Hydration)
-    this.wss.on('connection', (ws) => {
+    this.wss.on('connection', (ws: WS) => {
       const initPayload = JSON.stringify({
         type: 'init',
         data: {
@@ -96,8 +96,8 @@ class WebUIController {
   broadcast(event: WebUIEvent) {
     if (!this.wss) return;
     const payload = JSON.stringify(event);
-    this.wss.clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
+    this.wss.clients.forEach((client: WS) => {
+      if (client.readyState === 1 /* OPEN */) {
         client.send(payload);
       }
     });

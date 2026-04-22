@@ -18,11 +18,20 @@ const SAFE_COMMANDS = new Set([
   'date', 'tree', 'wc', 'sort', 'uniq',
 ]);
 
+const SECURITY_TOOLS = new Set([
+  'sqlmap', 'nmap', 'nikto', 'gobuster', 'whatweb', 'ffuf', 'nuclei',
+  'masscan', 'nc', 'wpscan', 'subfinder', 'john', 'hashcat',
+  'ctf_auto', 'ctf_solver', 'ctf_stego', 'ctf_file_analyzer', 'ctf_web_analyzer', 'ctf_network_analyzer',
+  'sethEngine',
+]);
+
 export function isToolAllowed(
   tool: ToolDefinition,
   input: Record<string, unknown>,
   config: ToolPermissionConfig,
 ): { allowed: boolean; reason?: string; needsConfirmation: boolean } {
+  const securityProfile = config.securityProfile ?? 'standard';
+
   // Check denied tools
   if (config.deniedTools.includes(tool.name)) {
     return {
@@ -48,6 +57,28 @@ export function isToolAllowed(
     return { allowed: true, needsConfirmation: false };
   }
 
+  // Security profile policy
+  if (securityProfile === 'safe') {
+    if (SECURITY_TOOLS.has(tool.name)) {
+      return {
+        allowed: false,
+        reason: `Güvenlik profili "safe" modunda "${tool.name}" aracı kapalı.`,
+        needsConfirmation: false,
+      };
+    }
+    if (tool.name === 'shell' && typeof input.command === 'string') {
+      const command = input.command.trim();
+      const firstWord = command.split(/\s+/)[0]?.toLowerCase() ?? '';
+      if (!SAFE_COMMANDS.has(command) && !SAFE_COMMANDS.has(firstWord)) {
+        return {
+          allowed: false,
+          reason: `Güvenlik profili "safe" modunda bu shell komutu izinli değil: ${firstWord || '(boş)'}`,
+          needsConfirmation: false,
+        };
+      }
+    }
+  }
+
   // Shell commands — extra scrutiny
   if (tool.name === 'shell' && typeof input.command === 'string') {
     const command = input.command.trim();
@@ -65,6 +96,12 @@ export function isToolAllowed(
         needsConfirmation: true,
         reason: `Yıkıcı komut: ${firstWord}`,
       };
+    }
+  }
+
+  if (securityProfile === 'pentest') {
+    if (tool.name === 'shell' || SECURITY_TOOLS.has(tool.name)) {
+      return { allowed: true, needsConfirmation: false };
     }
   }
 

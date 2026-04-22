@@ -1,6 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket as WS, type RawData } from 'ws';
 import open from 'open';
 import chalk from 'chalk';
 import { join } from 'path';
@@ -22,10 +22,10 @@ export async function startWebServer(port = 4321) {
   const publicPath = join(__dirname, '..', '..', 'web', 'public');
   app.use(express.static(publicPath));
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws: WS) => {
     console.log(chalk.cyan('  🌐 Web UI bağlandı.'));
-    
-    ws.on('message', (message) => {
+
+    ws.on('message', (message: RawData) => {
       try {
         const event = JSON.parse(message.toString());
         // Web'den gelen komutları/mesajları burada handle edeceğiz

@@ -7,6 +7,7 @@ import { ToolExecutor } from '../tools/executor.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { BudgetExceededError } from '../core/errors.js';
 import { ThinkingFilter } from '../thinking-filter.js';
+import { webUIController } from '../web/controller.js';
 
 // Helper to let the event loop breathe
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -62,6 +63,9 @@ export async function runAgentLoop(
     { role: 'user', content: userMessage },
   ];
 
+  // v3.9.0: Web UI'ya geçmişi gönder
+  webUIController.sendHistory(messages);
+
   const budget: AgentBudget = {
     maxTurns: options.maxTurns,
     maxTokens: options.maxTokens,
@@ -104,8 +108,12 @@ export async function runAgentLoop(
         let streamResponse: ChatResponse | null = null;
 
         // Create a fresh filter per turn so state doesn't bleed across turns
+        let accumulatedText = '';
         const filter = new ThinkingFilter((chunk: string) => {
+          accumulatedText += chunk;
           if (options.onText) options.onText(chunk);
+          // v3.9.0: Web UI'ya akışı gönder (tam birikim — frontend replace ediyor)
+          webUIController.sendText(accumulatedText);
         });
 
         for await (const event of activeProvider.stream(messages, chatOptions)) {
@@ -135,6 +143,8 @@ export async function runAgentLoop(
           });
           filter.feed(textContent);
           filter.end();
+          // v3.9.0: Web UI'ya metni gönder
+          webUIController.sendText(textContent);
         }
       }
     } catch (err: any) {
@@ -163,6 +173,16 @@ export async function runAgentLoop(
       outputTokens: totalUsage.outputTokens + response.usage.outputTokens,
     };
     budget.tokensUsed = totalUsage.inputTokens + totalUsage.outputTokens;
+
+    // v3.9.0: Web UI'ya istatistikleri gönder
+    webUIController.sendStats({
+      messages: messages.length,
+      inputTokens: totalUsage.inputTokens,
+      outputTokens: totalUsage.outputTokens,
+      turns: budget.turnsUsed,
+      provider: activeProvider.name,
+      model: activeModel,
+    } as any);
 
     // Check budget
     if (budget.tokensUsed >= budget.maxTokens) {
@@ -209,6 +229,8 @@ export async function runAgentLoop(
 
       const chunkResults = await Promise.all(chunk.map(async (toolBlock) => {
         if (options.onToolCall) options.onToolCall(toolBlock.name, toolBlock.input);
+        // v3.9.0: Web UI'ya araç çağrısını gönder
+        webUIController.sendToolCall(toolBlock.name, toolBlock.input);
 
         // #1 Loop detection
         const loopResult = loopDetector.checkToolCall(toolBlock.name, toolBlock.input);
@@ -235,6 +257,8 @@ export async function runAgentLoop(
         );
 
         if (options.onToolResult) options.onToolResult(toolBlock.name, result.output, result.isError ?? false, result.data);
+        // v3.9.0: Web UI'ya araç sonucunu gönder
+        webUIController.sendToolResult(toolBlock.name, result.output, result.isError ?? false);
 
         return { toolBlock, result, record };
       }));

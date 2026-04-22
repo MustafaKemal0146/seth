@@ -135,13 +135,15 @@ export class ReplStreamingController {
         const normalizedBuffer = this.streamInitialBuffer.trim().toLowerCase();
         const normalizedUser = this.userInputForEchoStripping.trim().toLowerCase();
         
-        if (normalizedBuffer.length > 10 && !normalizedUser.startsWith(normalizedBuffer.slice(0, 10))) {
-          // Bu bir echo değil, doğrudan cevap. Tamponu serbest bırak.
+        // Buffer'ın ilk (max 10) karakteri kullanıcı girdisiyle eşleşmiyor → echo değil
+        const userPrefix = normalizedUser.slice(0, Math.min(10, normalizedUser.length));
+        if (normalizedBuffer.length > 10 && !normalizedBuffer.startsWith(userPrefix)) {
+          // Doğrudan cevap geliyor, tamponu serbest bırak.
           this.echoStripped = true;
           chunk = this.streamInitialBuffer;
           this.streamInitialBuffer = '';
         } else {
-          // Echo olma ihtimali yüksek, biriktirmeye devam et.
+          // Echo olma ihtimali var, biriktirmeye devam et.
           return;
         }
       } else {

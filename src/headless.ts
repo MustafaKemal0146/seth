@@ -33,10 +33,11 @@ export async function runHeadless(
   const model = options.model ?? resolveModel(providerName, config);
 
   const provider = await createProvider(providerName, config);
-  const toolRegistry = options.noTools ? new ToolRegistry() : await createDefaultRegistry();
+  const toolRegistry = options.noTools ? new ToolRegistry() : await createDefaultRegistry(config);
   const isAutoApprove = options.autoApprove ?? config.autoApprove ?? false;
   const confirmFn = isAutoApprove ? async () => true : undefined;
   const toolExecutor = new ToolExecutor(toolRegistry, config.tools, confirmFn);
+  toolExecutor.setSecurityProfile(config.tools.securityProfile ?? 'standard');
 
   setAgentSessionContext(`headless-${randomUUID()}`);
 

@@ -107,9 +107,10 @@ export const agentSpawnTool: ToolDefinition = {
         provider = await createProvider(config.defaultProvider as ProviderName, config);
       }
 
-      const toolRegistry = allowTools ? await createDefaultRegistry() : await import('./registry.js').then(m => new m.ToolRegistry());
       const config = loadConfig();
+      const toolRegistry = allowTools ? await createDefaultRegistry(config) : await import('./registry.js').then(m => new m.ToolRegistry());
       const toolExecutor = new ToolExecutor(toolRegistry, config.tools, async () => true); // Alt-ajan auto-approve
+      toolExecutor.setSecurityProfile(config.tools.securityProfile ?? 'standard');
 
       const systemPrompt =
         buildSystemPrompt(cwd ?? sharedCwd) +

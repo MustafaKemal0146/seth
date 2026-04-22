@@ -18,8 +18,9 @@ export async function startModernUi(configOverrides: Partial<SETHConfig>) {
   const model = resolveModel(providerName, cfg, configOverrides.defaultModel);
   
   const provider = await createProvider(providerName, cfg);
-  const registry = await createDefaultRegistry();
+  const registry = await createDefaultRegistry(cfg);
   const executor = new ToolExecutor(registry, cfg.tools);
+  executor.setSecurityProfile(cfg.tools.securityProfile ?? 'standard');
 
   const agentOptions: UseSethAgentOptions = {
     provider,

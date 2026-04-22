@@ -154,6 +154,7 @@ export OPENROUTER_API_KEY=sk-or-xxxxx
 | `/tema` | Renk teması (dark, light, cyberpunk, retro, ocean, sunset) |
 | `/context <miktar>` | Token bütçesi (örn: 500k, 2m) |
 | `/yetki <full\|normal\|dar>` | İzin seviyesi |
+| `/güvenlik <safe\|standard\|pentest>` | Güvenlik profili |
 | `/apikey` | API anahtarlarını yönet |
 
 ### Araçlar & Sistem
@@ -257,6 +258,31 @@ Konuşma sonunda AI önemli bilgileri otomatik kaydeder — proje tercihleri, te
   { "event": "OnResponse",                         "command": "notify-send 'SETH' 'Yanıt hazır'", "async": true }
 ]
 ```
+
+---
+
+## 🔐 Plugin Güvenliği
+
+`~/.seth/plugins/` altındaki her plugin için manifest zorunludur:
+
+- `my-plugin.js`
+- `my-plugin.manifest.json`
+
+Manifest alanları:
+
+```json
+{
+  "name": "my_plugin_tool",
+  "main": "my-plugin.js",
+  "permissions": ["read_fs", "write_fs"],
+  "sha256": "..."
+}
+```
+
+Plugin yükleme sırasında:
+- SHA256 doğrulanır
+- İzin deklarasyonu aktif güvenlik profili ile karşılaştırılır (`safe|standard|pentest`)
+- Uyuşmayan pluginler sebebiyle birlikte reddedilir
 
 ---
 

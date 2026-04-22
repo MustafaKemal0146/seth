@@ -1215,7 +1215,7 @@ ${chalk.dim('Yanıt süresi: 24 saat içinde • Çalışma dili: Türkçe, İng
     const { setupShellCompletion } = await import('./shell-completion.js');
     const result = await setupShellCompletion();
     const output = result.lines
-      .map(l => l.startsWith('✓') ? chalk.green(l) : chalk.dim(l))
+      .map((l: string) => l.startsWith('✓') ? chalk.green(l) : chalk.dim(l))
       .join('\n');
     return { output };
   },
