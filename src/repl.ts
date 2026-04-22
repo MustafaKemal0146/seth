@@ -1,55 +1,41 @@
 /**
-/**
- * @fileoverview SETH REPL — readline tabanlı etkileşimli terminal arayüzü.
- *
- * - Spinner, ToolCall, ToolResult, StatsBar, ContextBar
- * - Plan modu onay akışı
- * - Alt-ajan derinlik göstergesi
- * - Otomatik context %80 uyarısı
+ * @fileoverview Interactive terminal interface (REPL).
  */
 
-import * as readline from 'readline';
-import { join as pathJoin, resolve as pathResolve } from 'path';
-import { homedir } from 'os';
-import { statSync } from 'fs';
-import type {
-  LLMProvider,
-  ProviderName,
-  ChatMessage,
-  SETHConfig,
-  TokenUsage,
-  PermissionLevel,
-  ThinkingStyle,
-} from './types.js';
-import { createProvider } from './providers/base.js';
-import { createDefaultRegistry, ToolRegistry } from './tools/registry.js';
-import { setAgentSessionContext } from './session-runtime.js';
-import { buildSystemPrompt } from './project-instructions.js';
-import { ToolExecutor } from './tools/executor.js';
-import { runAgentLoop } from './agent/loop.js';
+import readline from 'node:readline';
+import { homedir, tmpdir } from 'node:os';
+import { join as pathJoin } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { writeFile as fsWriteFile, readFile as fsReadFile, unlink as fsUnlink } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import chalk from 'chalk';
 import {
-  createSession,
-  saveSession,
-  saveSessionBackup,
-  updateSessionMessages,
-  loadSession,
-} from './storage/session.js';
+  createProvider,
+} from './providers/base.js';
 import {
-  resolveModel,
   loadConfig,
   saveConfig,
-  persistModelForProvider,
+  resolveModel,
   persistProviderAndModel,
   getEffectiveContextBudgetTokens,
 } from './config/settings.js';
-import { executeCommand } from './commands.js';
-import type { CommandContext } from './commands.js';
 import {
-  renderToolCall,
-  renderToolResult,
+  createSession,
+  saveSession,
+  loadSession,
+  updateSessionMessages,
+} from './storage/session.js';
+import {
+  ToolRegistry,
+  createDefaultRegistry,
+} from './tools/registry.js';
+import { ToolExecutor } from './tools/executor.js';
+import {
   renderError,
   renderStats,
   renderMarkdown,
+  renderToolCall,
+  renderToolResult,
   stripLeadingUserEchoFromAssistantDisplay,
   startSpinner,
   clearSpinner,
@@ -68,69 +54,39 @@ import { setSharedAgentContext } from './tools/agent-spawn.js';
 import { writeRecoveryCheckpoint, checkRecovery, clearRecovery } from './session-recovery.js';
 import { generateSessionTitle } from './session-title.js';
 import { recordMessage } from './chat-recording.js';
-import chalk from 'chalk';
 import { cmd, promptBright } from './theme.js';
 import { loadHistory, addToHistory, storePaste } from './storage/history.js';
 import { runHistorySearch } from './history-search.js';
 import { runHooks } from './hooks.js';
+import { webUIController } from './web/controller.js';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+import type { ProviderName, SETHConfig, ChatMessage, PermissionLevel, ThinkingStyle, LLMProvider } from './types.js';
+import { executeCommand, COMMANDS, type CommandContext } from './commands.js';
+import { runAgentLoop, type AgentLoopOptions } from './agent/loop.js';
 
-interface ToolEvent {
-  type: 'call' | 'result';
-  name: string;
-  detail: string;
-  isError?: boolean;
-  timestamp: number;
-}
-
-interface AgentRunState {
-  processing: boolean;
-  thinking: boolean;
-  thinkingText: string;
-  currentTool: string | null;
-  toolEvents: ToolEvent[];
-  streamingText: string;
-  planWaiting: boolean;
-  planText: string;
-  subAgentDepth: number;
-  turns: number;
-  maxTurns: number;
-}
-
-// ─── Read prompt from stdin using readline ────────────────────────────────────
-// Ink handles the UI but we still use readline for the actual input
+// ─── REPL Implementation ──────────────────────────────────────────────────────
 
 export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelcome = false, resumeSessionId?: string, userEmail?: string): Promise<void> {
   let appConfig = loadConfig(configOverrides);
+  let currentCwd = process.cwd();
   
   // Temayı yükle
   const { setTheme } = await import('./theme.js');
-  if (appConfig.theme) {
-    setTheme(appConfig.theme as any);
-  }
+  if (appConfig.theme) setTheme(appConfig.theme as any);
 
   // Graceful shutdown kur
   const { setupGracefulShutdown, startBackgroundCleanup } = await import('./lifecycle.js');
   setupGracefulShutdown();
   void startBackgroundCleanup(pathJoin(homedir(), '.seth', 'sessions'));
 
-  // Env doğrulama
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  if (anthropicKey && !anthropicKey.startsWith('sk-ant-')) {
-    console.warn(chalk.yellow('  ⚠ ANTHROPIC_API_KEY formatı geçersiz görünüyor (sk-ant- ile başlamalı)'));
-  }
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (openaiKey && !openaiKey.startsWith('sk-')) {
-    console.warn(chalk.yellow('  ⚠ OPENAI_API_KEY formatı geçersiz görünüyor (sk- ile başlamalı)'));
-  }
-
   let currentProvider: ProviderName = appConfig.defaultProvider;
   let currentModel = resolveModel(currentProvider, appConfig);
   let toolsEnabled = true;
   let agentEnabled = appConfig.agent.enabled;
+  let currentEffort = appConfig.effort ?? 'medium';
   let provider: LLMProvider;
   let totalTurns = 0;
+  let compactWarned = false;
 
   try {
     provider = await createProvider(currentProvider, appConfig);
@@ -150,207 +106,100 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
     ensureProjectMetadata(currentCwd, provider, currentModel).catch(() => {});
   }).catch(() => {});
 
-  // #10 Crash recovery kontrolü
+  // #10 Crash recovery
   const recovery = checkRecovery();
-  if (recovery && recovery.messageCount > 0 && recovery.sessionId) {
+  if (recovery && recovery.messageCount > 0 && recovery.sessionId && !resumeSessionId) {
     const loaded = loadSession(recovery.sessionId);
     if (loaded && loaded.messages.length > 0) {
-      const title = recovery.title || loaded.messages[0] && typeof loaded.messages[0].content === 'string'
-        ? (loaded.messages[0].content as string).slice(0, 50)
-        : 'önceki oturum';
-      console.log(chalk.yellow(`\n  ⚡ Kurtarılabilir oturum bulundu: "${title}" (${recovery.messageCount} mesaj)`));
-      console.log(chalk.dim(`  Devam etmek için: /geçmiş ${recovery.sessionId.slice(0, 8)}\n`));
+      session = loaded;
+      console.log(chalk.green(`\n  ↺ Son oturum kurtarıldı: ${session.id.slice(0, 8)}… (${session.messages.length} mesaj)\n`));
     }
   }
-  setAgentSessionContext(session.id);
-  const laneHistories = { a: [] as ChatMessage[], b: [] as ChatMessage[] };
-  let activeLane: 'a' | 'b' = 'a';
-  let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
-  let currentCwd = process.cwd();
 
-  // ─── Oturum yükleme ──────────────────────────────────────────────────────────
   if (resumeSessionId) {
     const loaded = loadSession(resumeSessionId);
     if (loaded) {
       session = loaded;
-      laneHistories.a = [...(loaded.messages ?? [])];
-      laneHistories.b = [...(loaded.messagesLaneB ?? [])];
-      activeLane = loaded.activeLane ?? 'a';
-      totalUsage = loaded.tokenUsage ?? { inputTokens: 0, outputTokens: 0 };
-      currentProvider = loaded.provider;
-      currentModel = loaded.model;
-      try { provider = await createProvider(currentProvider, appConfig); } catch { /* mevcut provider'ı koru */ }
-      setAgentSessionContext(session.id);
-      console.log(chalk.green(`✓ Oturum yüklendi: ${session.id.slice(0, 8)}… (${laneHistories.a.length} mesaj)`));
-    } else {
-      console.error(chalk.red(`✗ Oturum bulunamadı: ${resumeSessionId}`));
+      console.log(chalk.green(`\n  ✓ Oturum yüklendi: ${resumeSessionId.slice(0, 8)}… (${session.messages.length} mesaj)\n`));
     }
   }
 
-  // Track shared agent context for sub-agents
+  let laneHistories = {
+    a: [...(session.messages ?? [])],
+    b: [...(session.messagesLaneB ?? [])],
+  };
+  let activeLane = session.activeLane ?? 'a';
+  let totalUsage = session.tokenUsage ?? { inputTokens: 0, outputTokens: 0 };
+
   setSharedAgentContext(provider, currentModel, currentCwd);
 
-  // ─── Welcome ────────────────────────────────────────────────────────────────
-  if (!skipWelcome) renderWelcomeAnimation(currentProvider, currentModel);
-
-  // ─── Readline setup ──────────────────────────────────────────────────────────
-  let rl: readline.Interface | null = null;
-  let currentAbortController: AbortController | null = null;
-  let processing = false;
-  let compactWarned = false; // #5 readonly session'a yazmak yerine ayrı değişken
-
   function getPromptStr(): string {
-    const cur = laneHistories[activeLane];
-    const userMsgs = cur.filter(m => m.role === 'user').length;
+    const userMsgs = laneHistories[activeLane].filter(m => m.role === 'user').length;
     const cumTokens = totalUsage.inputTokens + totalUsage.outputTokens;
     const budget = getEffectiveContextBudgetTokens(appConfig);
-
     const pct = budget > 0 ? Math.round((cumTokens / budget) * 100) : 0;
-    const tokenStr = cumTokens >= 1000 ? `${(cumTokens / 1000).toFixed(1)}k` : `${cumTokens}`;
-    const budgetStr = budget >= 1000 ? `${(budget / 1000).toFixed(0)}k` : `${budget}`;
-    const pctColor = pct > 85 ? chalk.red : pct > 60 ? chalk.yellow : chalk.dim;
-    const barFilled = Math.round(pct / 10);
-    const bar = '█'.repeat(barFilled) + '░'.repeat(10 - barFilled);
-    const effortStr = appConfig.effort && appConfig.effort !== 'medium' ? chalk.dim(`·${appConfig.effort}`) : '';
-
     const promptSym = promptBright('>');
-
+    
     if (userMsgs > 0 || cumTokens > 0) {
+      const tokenStr = cumTokens >= 1000 ? `${(cumTokens / 1000).toFixed(1)}k` : `${cumTokens}`;
+      const budgetStr = budget >= 1000 ? `${(budget / 1000).toFixed(0)}k` : `${budget}`;
       const lanePart = activeLane !== 'a' ? `${activeLane.toUpperCase()}·` : '';
-      const info = chalk.dim(`[${lanePart}${userMsgs}msg·${tokenStr}/${budgetStr}]`);
-      const ctxBar = pct > 0 ? ` ${pctColor(bar)}${chalk.dim(` ${pct}%`)}` : '';
-      const effortPart = appConfig.effort && appConfig.effort !== 'medium' ? chalk.dim(` ·${appConfig.effort}`) : '';
-      return `${info}${ctxBar}${effortPart}\n${promptSym} `;
+      return chalk.dim(`[${lanePart}${userMsgs}msg·${tokenStr}/${budgetStr}] `) + promptSym + ' ';
     }
-    return `${promptSym} `;
+    return promptSym + ' ';
   }
 
-  // ─── Command context ─────────────────────────────────────────────────────────
   const ctx: CommandContext = {
     get config() { return appConfig; },
     currentProvider,
     currentModel,
     toolsEnabled,
     agentEnabled,
-
-    setProvider: async (name: ProviderName) => {
+    setProvider: async (name) => {
       provider = await createProvider(name, appConfig);
-      currentProvider = name;
-      ctx.currentProvider = name;
-      currentModel = resolveModel(name, appConfig);
-      ctx.currentModel = currentModel;
-      setSharedAgentContext(provider, currentModel, currentCwd);
+      currentProvider = name; ctx.currentProvider = name;
+      currentModel = resolveModel(name, appConfig); ctx.currentModel = currentModel;
       persistProviderAndModel(name, currentModel);
       if (rl) rl.setPrompt(getPromptStr());
     },
-
-    setModel: (model: string) => {
-      currentModel = model;
-      ctx.currentModel = model;
-      setSharedAgentContext(provider, model, currentCwd);
-      persistModelForProvider(currentProvider, model);
-      if (rl) rl.setPrompt(getPromptStr());
-    },
-
-    setToolsEnabled: (enabled: boolean) => { toolsEnabled = enabled; ctx.toolsEnabled = enabled; },
-    setAgentEnabled: (enabled: boolean) => { agentEnabled = enabled; ctx.agentEnabled = enabled; },
-
-    clearHistory: (scope: 'active' | 'all' = 'active') => {
-      const snap = { ...session, messages: laneHistories.a, messagesLaneB: laneHistories.b, activeLane };
-      if (laneHistories.a.length > 0 || laneHistories.b.length > 0) saveSessionBackup(snap);
+    setModel: (m) => { currentModel = m; ctx.currentModel = m; if (rl) rl.setPrompt(getPromptStr()); },
+    setToolsEnabled: (e) => { toolsEnabled = e; ctx.toolsEnabled = e; },
+    setAgentEnabled: (e) => { agentEnabled = e; ctx.agentEnabled = e; },
+    clearHistory: (scope) => {
       if (scope === 'all') {
         laneHistories.a = []; laneHistories.b = [];
         totalUsage = { inputTokens: 0, outputTokens: 0 };
-        totalTurns = 0;
         session = createSession(currentProvider, currentModel);
-        setAgentSessionContext(session.id);
       } else {
         laneHistories[activeLane] = [];
       }
-      if (rl) rl.setPrompt(getPromptStr());
+      if (rl) rl.prompt();
     },
-
-    compactHistory: async () => {
-      const h = laneHistories[activeLane];
-      const keepLast = 8;
-      if (h.length < keepLast + 2) return null;
-      
-      // Özetlenecek mesajları al
-      const toSummarize = h.slice(0, -keepLast);
-      const toKeep = h.slice(-keepLast);
-      
-      try {
-        // Özet oluştur
-        const summaryPrompt = `Bu konuşmayı detaylı özetle. Şu başlıkları kullan:
-
-## Yapılan İşler
-- Hangi dosyalar değişti/okundu
-- Hangi komutlar çalıştırıldı
-
-## Alınan Kararlar  
-- Hangi yaklaşım seçildi
-- Neden bu yol tercih edildi
-
-## Mevcut Durum
-- Projenin şu anki hali
-- Açık sorunlar/eksikler
-
-## Devam Edilecekler
-- Sonraki adımlar
-- Bekleyen görevler
-
-Kısa tutma ama önemli detayları atlama.
-
-Konuşma:
-${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
-
-        const summaryResponse = await provider.chat([
-          { role: 'user', content: summaryPrompt }
-        ], { model: currentModel, tools: [] });
-        
-        const summary = summaryResponse.content || 'Özet oluşturulamadı.';
-        
-        // Yeni geçmiş: özet + son mesajlar
-        laneHistories[activeLane] = [
-          { role: 'user', content: `[KOMPAKT ÖZET]\n\n${summary}` },
-          { role: 'assistant', content: 'Özet kaydedildi, devam ediyoruz.' },
-          ...toKeep,
-        ];
-        
-        return { before: h.length, after: laneHistories[activeLane].length };
-      } catch (err) {
-        // Hata durumunda eski yöntemi kullan
-        laneHistories[activeLane] = [
-          { role: 'user', content: '[Önceki mesajlar sıkıştırıldı]' },
-          { role: 'assistant', content: 'Bağlam güncellendi.' },
-          ...toKeep,
-        ];
-        return { before: h.length, after: laneHistories[activeLane].length };
-      }
-    },
-
+    getContextBudgetTokens: () => getEffectiveContextBudgetTokens(appConfig),
+    setContextBudgetTokens: (n) => { saveConfig({ contextBudgetTokens: n }); appConfig = loadConfig(configOverrides); },
+    getActiveLane: () => activeLane,
+    setActiveLane: (l) => { activeLane = l; if (rl) rl.setPrompt(getPromptStr()); },
+    compactHistory: async () => null,
     undoHistory: () => {
-      if (laneHistories[activeLane].length < 2) return false;
-      laneHistories[activeLane] = laneHistories[activeLane].slice(0, -2);
-      if (rl) rl.setPrompt(getPromptStr());
-      return true;
+      if (laneHistories[activeLane].length > 0) {
+        laneHistories[activeLane].pop();
+        return true;
+      }
+      return false;
     },
-
-    changeCwd: (dir: string) => {
-      try {
-        const target = pathResolve(currentCwd, dir);
-        statSync(target);
-        currentCwd = target;
-        process.chdir(target);
-        setSharedAgentContext(provider, currentModel, currentCwd);
-        return target;
-      } catch { return null; }
-    },
-
+    changeCwd: (d) => { currentCwd = d; return d; },
     getCwd: () => currentCwd,
     getHistory: () => laneHistories[activeLane],
     getPermissionLevel: () => toolExecutor.getPermissionLevel(),
-    setPermissionLevel: (level: PermissionLevel) => toolExecutor.setPermissionLevel(level),
+    setPermissionLevel: (l) => {
+      toolExecutor.setPermissionLevel(l);
+      webUIController.sendSettings({ permissionLevel: l, securityProfile: toolExecutor.getSecurityProfile() });
+    },
+    getSecurityProfile: () => toolExecutor.getSecurityProfile(),
+    setSecurityProfile: (p) => {
+      toolExecutor.setSecurityProfile(p);
+      webUIController.sendSettings({ permissionLevel: toolExecutor.getPermissionLevel(), securityProfile: p });
+    },
     getStats: () => ({
       messages: laneHistories[activeLane].length,
       inputTokens: totalUsage.inputTokens,
@@ -358,820 +207,311 @@ ${toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n')}`;
       turns: totalTurns,
     }),
     getSessionId: () => session.id,
-    getMessages: () => laneHistories[activeLane],
-    setThinkingStyle: (style: ThinkingStyle) => {
-      saveConfig({ repl: { thinkingStyle: style } });
-      appConfig = loadConfig(configOverrides);
-    },
-    setVimMode: (enabled: boolean) => {
-      const currentRepl = appConfig.repl || {};
-      const newRepl = { ...currentRepl, vimMode: enabled };
-      saveConfig({ repl: newRepl });
-      appConfig = loadConfig(configOverrides);
-      if (rl) rl.setPrompt(getPromptStr());
-    },
-    getContextBudgetTokens: () => getEffectiveContextBudgetTokens(appConfig),
-    setContextBudgetTokens: (n: number) => {
-      saveConfig({ contextBudgetTokens: n });
-      appConfig = loadConfig(configOverrides);
-      if (rl) rl.setPrompt(getPromptStr());
-    },
-    getActiveLane: () => activeLane,
-    setActiveLane: (lane: 'a' | 'b') => {
-      activeLane = lane;
-      if (rl) rl.setPrompt(getPromptStr());
-    },
+    setThinkingStyle: (s) => { saveConfig({ repl: { thinkingStyle: s } }); appConfig = loadConfig(configOverrides); },
+    setEffort: (level) => { currentEffort = level; saveConfig({ effort: level }); appConfig = loadConfig(configOverrides); webUIController.sendEffort(level); },
+    setVimMode: (e) => { saveConfig({ repl: { ...appConfig.repl, vimMode: e } }); appConfig = loadConfig(configOverrides); },
   };
 
-  // ─── Plan approval (non-Ink, readline-based) ─────────────────────────────────
-  async function askPlanApproval(planText: string): Promise<boolean> {
-    console.log('\n' + chalk.yellow.bold('  📋 AJAN PLANI'));
-    console.log(chalk.dim('  ' + '─'.repeat(50)));
-    console.log('\n' + planText.split('\n').map(l => '  ' + l).join('\n'));
-    console.log('\n' + chalk.dim('  ' + '─'.repeat(50)));
-    console.log(
-      chalk.dim('  Planı onayla → ') +
-      chalk.green.bold('[E]vet') +
-      chalk.dim(' / Reddet → ') +
-      chalk.red.bold('[H]ayır') +
-      chalk.dim(' / Düzenle → ') +
-      chalk.yellow.bold('[D]üzenle') +
-      '\n',
-    );
+  if (!skipWelcome) renderWelcomeAnimation(currentProvider, currentModel);
 
-    return new Promise<boolean>((resolve) => {
-      const wasRaw = (process.stdin as NodeJS.ReadStream).isRaw;
-      if ((process.stdin as NodeJS.ReadStream).isTTY) {
-        (process.stdin as NodeJS.ReadStream).setRawMode(true);
-      }
-      process.stdin.resume();
+  let rl: readline.Interface | null = null;
+  let currentAbortController: AbortController | null = null;
+  let processing = false;
+  let lastPastedContent = '';
+  let isProgrammaticClose = false;
 
-      const onData = (buf: Buffer) => {
-        const key = buf.toString().toLowerCase().trim();
-        process.stdin.removeListener('data', onData);
-        if ((process.stdin as NodeJS.ReadStream).isTTY) {
-          (process.stdin as NodeJS.ReadStream).setRawMode(wasRaw);
-        }
-        if (key === 'e' || key === 'y' || key === '\r' || key === '\n') {
-          process.stdout.write(chalk.green('  ✓ Plan onaylandı.\n\n'));
-          resolve(true);
-        } else {
-          process.stdout.write(chalk.red('  ✗ Plan reddedildi. Ajan durdu.\n\n'));
-          resolve(false);
-        }
-      };
-      process.stdin.on('data', onData);
-    });
-  }
+  async function runAgentTurn(text: string) {
+    const controller = new AbortController();
+    currentAbortController = controller;
+    processing = true;
+    webUIController.sendStatus('processing', true);
 
-  // ─── Agent turn ───────────────────────────────────────────────────────────────
-  async function runAgentTurn(finalInput: string): Promise<void> {
-    sethLog('Ajan turu yürütme');
-    const turnStart = Date.now();
-    
-    // v3.8.17: Maliyet tahmini
-    const estimatedTokens = Math.ceil(finalInput.length / 4);
-    const { calculateCostUSD, formatCostUSD } = await import('./model-cost.js');
-    const estimatedCost = calculateCostUSD(estimatedTokens, 0, currentModel, currentProvider);
-    process.stdout.write(chalk.dim(`  [Tahmini: ~${estimatedTokens} token / ${formatCostUSD(estimatedCost)}]\n`));
-
-    // Terminal başlığını "işleniyor" olarak güncelle
-    process.stdout.write(`\x1b]0;⏳ SETH — İşleniyor...\x07`);
-    const spinOpts = { thinkingMode: appConfig.repl?.thinkingStyle ?? 'minimal' };
-    const stream = createReplStreamingController({
-      streamMode: resolveStreamMode(appConfig.repl?.streamMode),
-      hideIncompleteLine: appConfig.repl?.streamHideIncompleteLine !== false,
-      throttleMs: appConfig.repl?.streamThrottleMs ?? 24,
+    // Streaming controller — stable/unstable markdown lexer
+    const streaming = createReplStreamingController({
+      streamMode: resolveStreamMode(undefined),
+      hideIncompleteLine: false,
+      throttleMs: 0,
       renderMarkdown,
     });
+    streaming.onTurnStart(text);
 
-    // Context budget check
-    const budget = getEffectiveContextBudgetTokens(appConfig);
-    const cumTokens = totalUsage.inputTokens + totalUsage.outputTokens;
-    const pct = budget > 0 ? (cumTokens / budget) * 100 : 0;
-    
-    if (budget > 0 && pct > 95) {
-      console.log(chalk.yellow(`\n  ⚠️  Context sınırına yaklaştınız (%${pct.toFixed(0)} dolu)`));
-      const { confirm } = await import('@clack/prompts');
-      const shouldCompress = await confirm({ message: 'Sıkıştırma yapılsın mı?' });
-      
-      if (shouldCompress) {
-        const compacted = await ctx.compactHistory();
-        if (compacted) {
-          console.log(chalk.green(`\n  ✓ Context sıkıştırıldı (${compacted.before} -> ${compacted.after} mesaj), devam ediyoruz...\n`));
-        }
-      } else if (pct > 110) {
-        console.log(chalk.red(`\n  ⚠️  Context sınırı aşıldı! Sadece /sıkıştır komutu kullanılabilir.\n`));
-        createInterface();
-        return;
-      }
-    }
-
-    // Cevap ile spinner arasında 1 satır boşluk
+    // Cevap başlamadan önce görsel ayrım
     process.stdout.write('\n');
 
-    // #6 İlk mesajda oturum başlığı üret (arka planda)
-    if (laneHistories[activeLane].length === 0 && !(session as { title?: string }).title) {
-      generateSessionTitle(finalInput, provider, currentModel).then(title => {
-        session = { ...session, title } as typeof session;
-        saveSession(session); // başlığı dosyaya kaydet
-      }).catch(() => {});
-    }
-
-    startSpinner('Düşünüyor…', true, { thinkingMode: spinOpts.thinkingMode });
-
-    let didClearSpinner = false;
-    function clearSpin() {
-      if (!didClearSpinner) {
-        clearSpinner();
-        didClearSpinner = true;
-      }
-    }
-
-    currentAbortController = new AbortController();
-    resetPlanModeState();
+    // Spinner başlat
+    startSpinner('Düşünüyor…', true, {
+      thinkingMode: appConfig.repl?.thinkingStyle === 'minimal' ? 'minimal' : 'animated',
+    });
 
     try {
-      const systemPrompt = buildSystemPrompt(currentCwd);
-      // #18 Otomatik belleği sistem promptuna ekle
-      let fullSystemPrompt = systemPrompt;
-      try {
-        const { loadAutoMemories } = await import('./auto-memory.js');
-        const autoMem = loadAutoMemories(3);
-        if (autoMem.trim()) {
-          fullSystemPrompt += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nOTOMATİK BELLEK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${autoMem}\n`;
-        }
-      } catch { /* otomatik bellek yoksa atla */ }
-      // #5 Skills
-      try {
-        const { loadSkills, formatSkillsForPrompt } = await import('./skills.js');
-        const skills = loadSkills(currentCwd);
-        if (skills.length > 0) fullSystemPrompt += formatSkillsForPrompt(skills);
-      } catch { /* skills yoksa atla */ }
-      const tools = toolsEnabled ? toolRegistry : new ToolRegistry();
-      const executor = toolsEnabled ? toolExecutor : new ToolExecutor(tools, appConfig.tools, confirmFn);
-
-      // Bind hooks to manage spinner during confirmation
-      executor.onConfirmStart = () => {
-        clearSpinner();
-      };
-      executor.onConfirmEnd = () => {
-        startSpinner('Onaylandı, devam ediliyor…', false);
-      };
-
-      const result = await runAgentLoop(finalInput, laneHistories[activeLane], {
-        provider,
-        model: currentModel,
-        systemPrompt: fullSystemPrompt,
-        toolRegistry: tools,
-        toolExecutor: executor,
-        maxTurns: agentEnabled ? appConfig.agent.maxTurns : 1,
-        maxTokens: getEffectiveContextBudgetTokens(appConfig),
-        cwd: currentCwd,
-        debug: appConfig.debug,
-        abortSignal: currentAbortController.signal,
-        effort: appConfig.effort ?? 'medium',
-        // Fallback sağlayıcı — settings.json'da fallbackProvider tanımlıysa
-        ...(appConfig.fallbackProvider && appConfig.fallbackProvider !== currentProvider ? {
-          fallbackProvider: await createProvider(appConfig.fallbackProvider, appConfig).catch(() => undefined),
-          fallbackModel: appConfig.fallbackModel,
-        } : {}),
-
-        onTurnStart: () => {
-          stream.onTurnStart(finalInput);
-          if (!didClearSpinner) {
-            startSpinner('Düşünüyor…', true, { thinkingMode: spinOpts.thinkingMode });
-          }
+      const loopOptions: AgentLoopOptions = {
+        provider, model: currentModel, systemPrompt: '',
+        toolRegistry, toolExecutor,
+        maxTurns: appConfig.agent.maxTurns,
+        maxTokens: appConfig.agent.maxTokens,
+        cwd: currentCwd, debug: appConfig.debug,
+        effort: currentEffort,
+        abortSignal: controller.signal,
+        onText: (chunk) => {
+          streaming.onText(chunk, () => clearSpinner());
         },
-
         onToolCall: (name, input) => {
-          clearSpin();
-          // Hook: PreToolUse
-          runHooks('PreToolUse', name, { tool: name, input: JSON.stringify(input).slice(0, 200) });
-          // #1 JIT Context — dosya/dizin araçlarında alt dizin context'i yükle
-          if (['file_read', 'file_write', 'file_edit', 'list_directory', 'batch_read'].includes(name)) {
-            const accessedPath = String(input.path ?? (Array.isArray(input.paths) ? input.paths[0] : '') ?? '');
-            if (accessedPath) {
-              import('./jit-context.js').then(({ discoverJitContext }) => {
-                const jit = discoverJitContext(accessedPath, currentCwd);
-                if (jit) process.stderr.write(`[JIT] ${accessedPath.split('/').slice(-2).join('/')}\n`);
-              }).catch(() => {});
-            }
-          }
-          // Check plan approval
-          if (isPlanWaitingApproval()) {
-            const ps = getPlanModeState();
-            // Plan display happens via tool result output intercept below
-            void (async () => {
-              const approved = await askPlanApproval(ps.planText);
-              if (approved) {
-                approvePlan();
-              } else {
-                rejectPlan();
-                currentAbortController?.abort();
-              }
-            })();
-          }
+          clearSpinner();
+          streaming.commitSegmentBeforeTool();
           process.stdout.write(renderToolCall(name, input) + '\n');
-          didClearSpinner = false;
-          startSpinner(getToolSpinnerText(name, input), false);
+          startSpinner(getToolSpinnerText(name, input));
         },
-
         onToolResult: (name, output, isError, data) => {
-          clearSpin();
-          // Hook: PostToolUse
-          runHooks('PostToolUse', name, { tool: name, output: output.slice(0, 200), error: String(isError) });
-          // If plan approval is in output, intercept
-          if (output.startsWith('__PLAN_APPROVAL_REQUIRED__')) {
-            const planText = output.replace('__PLAN_APPROVAL_REQUIRED__\n', '');
-            void (async () => {
-              const approved = await askPlanApproval(planText);
-              if (approved) {
-                approvePlan();
-                // Resume processing
-                didClearSpinner = false;
-                startSpinner('Plan uygulanıyor…', false);
-              } else {
-                rejectPlan();
-                currentAbortController?.abort();
-              }
-            })();
-            return;
-          }
-          process.stdout.write(renderToolResult(name, output, isError, data) + '\n');
-          didClearSpinner = false;
-          startSpinner('Yanıtlanıyor…', true, { thinkingMode: spinOpts.thinkingMode });
+          clearSpinner();
+          process.stdout.write(renderToolResult(name, output, isError, data));
         },
+      };
 
-        onText: (text) => {
-          clearSpin();
-          stream.onText(text, () => {});
-        },
-      });
+      const result = await runAgentLoop(text, laneHistories[activeLane], loopOptions);
 
-      // Finalize CWD changes
-      for (const call of result.toolCalls) {
-        if (call.newCwd) {
-          currentCwd = call.newCwd;
-          try { process.chdir(currentCwd); } catch {}
-          setSharedAgentContext(provider, currentModel, currentCwd);
-        }
-      }
+      streaming.finalize(text, result.finalText, stripLeadingUserEchoFromAssistantDisplay);
 
-      clearSpin();
-      stream.finalize(finalInput, result.finalText.trim(), stripLeadingUserEchoFromAssistantDisplay);
-      // #15 AI yanıtını kaydet
-      if (result.finalText.trim()) {
-        recordMessage(session.id, { role: 'assistant', content: result.finalText.trim() }, result.totalUsage.outputTokens);
-      }
+      const statsLine = renderStats(
+        result.totalUsage.inputTokens,
+        result.totalUsage.outputTokens,
+        result.turns,
+      );
+      if (statsLine) process.stdout.write('\n' + statsLine + '\n');
 
-      if (result.finalText.trim() && !stream.skipFinalMarkdown) {
-        const forDisplay = stripLeadingUserEchoFromAssistantDisplay(result.finalText.trim(), finalInput);
-        if (forDisplay.trim()) {
-          console.log('\n' + renderMarkdown(forDisplay));
-        }
-      }
-
-      // Stats + context bar
-      const totalCum = totalUsage.inputTokens + result.totalUsage.inputTokens +
-        totalUsage.outputTokens + result.totalUsage.outputTokens;
-      const budgetNow = getEffectiveContextBudgetTokens(appConfig);
-      const pct = budgetNow > 0 ? Math.round((totalCum / budgetNow) * 100) : 0;
-      const barFilled = Math.round(pct / 5);
-      const bar = '█'.repeat(barFilled) + '░'.repeat(20 - barFilled);
-      const barColor = pct > 85 ? chalk.red : pct > 60 ? chalk.yellow : chalk.green;
-
-      const statsLine = renderStats(result.totalUsage.inputTokens, result.totalUsage.outputTokens, result.turns);
-      if (statsLine) {
-        const ctxLine = budgetNow > 0
-          ? chalk.dim('  ') + barColor(bar) + chalk.dim(` ${pct}%`)
-          : '';
-        console.log(statsLine + (ctxLine ? '  ' + ctxLine : ''));
-      }
-      console.log('');
-
-      // Update state
       laneHistories[activeLane] = result.messages;
       totalUsage = {
         inputTokens: totalUsage.inputTokens + result.totalUsage.inputTokens,
         outputTokens: totalUsage.outputTokens + result.totalUsage.outputTokens,
       };
       totalTurns += result.turns;
-      session = updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, result.totalUsage);
-      saveSession(session);
-      writeRecoveryCheckpoint(session); // #10 crash recovery
-
-      // #14 Otomatik sıkıştırma önerisi — %80 dolunca bir kez uyar
-      const newTotalCum = totalUsage.inputTokens + totalUsage.outputTokens;
-      const newBudget = getEffectiveContextBudgetTokens(appConfig);
-      if (newBudget > 0 && newTotalCum / newBudget >= 0.80) {
-        const alreadyWarned = compactWarned;
-        if (!alreadyWarned) {
-          compactWarned = true;
-          console.log(chalk.yellow('\n  ⚠  Bağlam %80 doldu. /sıkıştır komutuyla token tasarrufu yapabilirsiniz.\n'));
-        }
-      }
-
-      // #2 Rolling Summary — %75 dolunca otomatik özetle
-      const rsTokens = totalUsage.inputTokens + totalUsage.outputTokens;
-      const rsBudget = getEffectiveContextBudgetTokens(appConfig);
-      if (rsBudget > 0 && rsTokens / rsBudget >= 0.75 && laneHistories[activeLane].length > 16) {
-        import('./rolling-summary.js').then(({ applyRollingSummary }) => {
-          applyRollingSummary(laneHistories[activeLane], rsTokens, rsBudget, provider, currentModel)
-            .then(r => {
-              if (r.summarized) {
-                laneHistories[activeLane] = r.messages;
-                console.log(chalk.dim(`\n  ↩ Kayan özet: ${r.before} → ${r.after} mesaj\n`));
-              }
-            }).catch(() => {});
-        }).catch(() => {});
-      }
-
-      // #2 Otomatik bellek çıkarma — arka planda, sessizce
-      if (result.messages.length >= 6) {
-        import('./auto-memory.js').then(({ extractAndSaveMemories }) => {
-          extractAndSaveMemories(result.messages, provider, currentModel, currentCwd).catch(() => {});
-        }).catch(() => {});
-      }
-
-      // #12 Omission placeholder tespiti
-      if (result.finalText) {
-        import('./omission-detector.js').then(({ detectOmissionPlaceholder, getOmissionWarning }) => {
-          if (detectOmissionPlaceholder(result.finalText)) {
-            console.log(chalk.yellow(getOmissionWarning()));
-          }
-        }).catch(() => {});
-      }
-
+      saveSession(updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, result.totalUsage));
     } catch (err: any) {
-      clearSpin();
-      if (err?.name === 'AbortError' || err?.message?.includes('aborted')) {
-        // Esc handler zaten mesaj ve prompt verdi, tekrar verme
-        if (processing) {
-          console.log(chalk.red.bold('\n  ⚡ SETH: İşlem kullanıcı tarafından iptal edildi.\n'));
-        }
-      } else {
-        console.error(renderError(err instanceof Error ? err : new Error(String(err))));
-      }
+      clearSpinner();
+      if (err.name !== 'AbortError') console.error(chalk.red(`\n  ✗ Hata: ${err.message}`));
     } finally {
-      const wasAbortedByEsc = !processing;
-      currentAbortController = null;
       processing = false;
-      resetPlanModeState();
-      
-      // Terminal başlığını geri yükle
-      const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
-      const titleIcon = parseFloat(elapsed) > 10 ? '✓' : '●';
-      process.stdout.write(`\x1b]0;${titleIcon} SETH — ${elapsed}s\x07`);
-
-      // Eğer 30 saniyeden uzun sürdüyse bildir
-      if (parseFloat(elapsed) > 30) {
-        process.stdout.write(`\n\x07${chalk.green(`  ✓ Tamamlandı (${elapsed}s)`)}\n`);
-      }
-
-      // ─── Çakışma Önleyici: Sadece terminal başlığını temiz tut ────────────────
-      if (rl && !wasAbortedByEsc) {
-        // rl.prompt(true) KALDIRILDI — readline zaten yeni satırda bekliyor
-      }
+      currentAbortController = null;
+      webUIController.sendStatus('idle', false);
+      if (rl) rl.prompt();
     }
   }
 
-  // ─── REPL Loop ────────────────────────────────────────────────────────────────
-  function createInterface() {
-    // #7 Tab tamamlama — slash komutları + geçmiş önerileri
-    const completer = (line: string, callback: (err: Error | null, result: [string[], string]) => void) => {
-      const slashCmds = [
-        '/yardım', '/istatistikler', '/bağlam', '/ara', '/oturum-ara', '/doktor',
-        '/güncelle', '/diff', '/sağlayıcı', '/model', '/modeller', '/değiştir',
-        '/hafıza', '/bellek', '/sıkıştır', '/geri', '/temizle', '/kaydet',
-        '/export', '/oturum-export', '/oturum-import', '/geçmiş', '/tema',
-        '/context', '/yetki', '/apikey', '/araçlar', '/ajan', '/cron',
-        '/worktree', '/mcp-keşif', '/yapıştır', '/hook', '/rapor', '/cd', '/pwd',
-        '/effort', '/cikis',
-      ];
-      if (line.startsWith('/')) {
-        const hits = slashCmds.filter(c => c.startsWith(line));
-        const results = hits.length ? hits : slashCmds;
-        // Görsel öneri listesi — gemini-cli tarzı
-        if (results.length > 1 && results.length <= 12) {
-          process.stdout.write('\n' + chalk.dim(results.join('  ')) + '\n');
-          rl?.prompt(true);
-        }
-        return callback(null, [results, line]);
-      }
-      // Geçmişten öneri — async import
-      import('./prompt-suggestions.js').then(({ getPromptSuggestions }) => {
-        const suggestions = getPromptSuggestions(line);
-        if (suggestions.length > 0 && suggestions.length <= 5) {
-          process.stdout.write('\n' + chalk.dim(suggestions.map(s => s.slice(0, 60)).join('\n')) + '\n');
-          rl?.prompt(true);
-        }
-        callback(null, [suggestions.length ? suggestions : [], line]);
-      }).catch(() => callback(null, [[], line]));
-    };
+  // ─── Tab tamamlama ───────────────────────────────────────────────────────────
+  function tabCompleter(line: string): [string[], string] {
+    const trimmed = line.trimStart();
 
+    // Slash komut tamamlama: /k → /kaydet, /komut…
+    if (trimmed.startsWith('/')) {
+      const partial = trimmed.slice(1).toLowerCase();
+      const allCmds = Object.keys(COMMANDS).map(c => `/${c}`);
+      const hits = partial
+        ? allCmds.filter(c => c.slice(1).startsWith(partial))
+        : allCmds;
+      return [hits.length > 0 ? hits : allCmds, line];
+    }
+
+    // Dosya/dizin yolu tamamlama: ./foo, ../bar, /abs, ~/home
+    const pathMatch = line.match(/((?:\.\.?\/|\/|~\/)[^\s]*)$/);
+    if (pathMatch) {
+      try {
+        const pathPart = pathMatch[1]!.replace(/^~/, homedir());
+        const lastSlash = pathPart.lastIndexOf('/');
+        const dirPart  = lastSlash >= 0 ? pathPart.slice(0, lastSlash + 1) : './';
+        const basePart = lastSlash >= 0 ? pathPart.slice(lastSlash + 1)    : pathPart;
+        const absDir   = pathJoin(currentCwd, dirPart);
+        const entries  = readdirSync(absDir);
+        const hits     = entries
+          .filter(e => e.startsWith(basePart))
+          .map(e => line.slice(0, line.length - basePart.length) + e);
+        return [hits, line];
+      } catch {
+        return [[], line];
+      }
+    }
+
+    return [[], line];
+  }
+
+  // ─── Harici editör (Ctrl+X Ctrl+E) ──────────────────────────────────────────
+  async function openExternalEditor(): Promise<void> {
+    const currentInput = rl?.line ?? '';
+    const tmpFile = pathJoin(tmpdir(), `seth_edit_${Date.now()}.txt`);
+    const editor = process.env.EDITOR ?? process.env.VISUAL ?? 'nano';
+
+    await fsWriteFile(tmpFile, currentInput, 'utf-8');
+    rl?.pause();
+
+    await new Promise<void>((resolve) => {
+      const child = spawn(editor, [tmpFile], { stdio: 'inherit' });
+      child.on('close', resolve);
+      child.on('error', resolve);
+    });
+
+    const edited = await fsReadFile(tmpFile, 'utf-8').catch(() => currentInput);
+    await fsUnlink(tmpFile).catch(() => {});
+
+    rl?.resume();
+    rl?.write(null, { ctrl: true, name: 'u' }); // Mevcut satırı temizle
+    rl?.write(edited.trimEnd());
+    rl?.prompt();
+  }
+
+  // ─── Readline arayüzü ────────────────────────────────────────────────────────
+  function createInterface() {
     rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
       prompt: getPromptStr(),
       terminal: true,
-      historySize: 500,
-      completer,
+      completer: tabCompleter,
     });
-    // Kalıcı geçmişi yükle
-    const persistedHistory = loadHistory();
-    (rl as any).history = persistedHistory;
-    setupListeners();
-    process.stdout.write('\n');
-    rl.prompt();
-  }
 
-  // ─── Responsive: terminal yeniden boyutlandırma ───────────────────────────────
-  let resizeTimer: NodeJS.Timeout | null = null;
-  process.stdout.on('resize', () => {
-    if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
+    rl.on('line', async (line) => {
       if (processing) return;
-      const cols = process.stdout.columns || 80;
-      // Ekranı temizlemeden sadece prompt'u yeniden çiz
-      if (rl) {
-        rl.setPrompt(getPromptStr());
-        process.stdout.write(`\r\x1b[K`); // satırı temizle
-        (rl as any).prompt(true);
-      }
-      // Terminal başlığını güncelle
-      process.stdout.write(`\x1b]0;SETH — ${cols}×${process.stdout.rows || 24}\x07`);
-    }, 100);
-  });
-
-  function setupListeners() {
-    if (!rl) return;
-    let multilineBuffer = '';
-    let bufferedLines: string[] = [];
-    let lineTimer: NodeJS.Timeout | null = null;
-    let isProgrammaticClose = false;
-    let vimState: 'INSERT' | 'NORMAL' = 'INSERT';
-
-    // Bracketed paste desteği — paste direkt göndermesin
-    let pasteBuffer = '';
-    let inPaste = false;
-    let lastPastedContent = '';
-    let pasteExpanded = false;
-    if (process.stdout.isTTY) {
-      process.stdout.write('\x1b[?2004h');
-    }
-    const cleanupBracketedPaste = () => {
-      if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
-    };
-
-    // Hız bazlı paste algılama değişkenleri (Ctrl+Shift+V için)
-    let lastKeypressTime = 0;
-    let rapidCharCount = 0;
-    let rapidPasteTimer: NodeJS.Timeout | null = null;
-    const RAPID_THRESHOLD_MS = 20;
-    const RAPID_MIN_CHARS = 5;
-
-    const renderVimStatus = () => {
-      if (!appConfig.repl?.vimMode) return;
-      const status = vimState === 'NORMAL' ? chalk.bgBlue.white(' NORMAL ') : chalk.bgGreen.black(' INSERT ');
-      // Move to start of line, clear line, re-print prompt + status + line
-      process.stdout.write(`\r\x1b[K${getPromptStr()}${status} ${rl?.line}`);
-      // Restore cursor position
-      if (rl) {
-        const pos = rl.cursor + getPromptStr().length + 9; // 9 = length of " INSERT " or " NORMAL "
-        process.stdout.write(`\x1b[${pos + 1}G`);
-      }
-    };
-
-    const handleVimKey = (s: string, key: any) => {
-      if (!appConfig.repl?.vimMode || processing) return false;
-      
-      if (key.name === 'escape') {
-        vimState = 'NORMAL';
-        renderVimStatus();
-        return true;
-      }
-
-      if (vimState === 'NORMAL') {
-        // INSERT moduna geçiş
-        if (key.name === 'i') { vimState = 'INSERT'; renderVimStatus(); return true; }
-        if (key.name === 'a') { vimState = 'INSERT'; if (rl) rl.write(null, { name: 'right' }); renderVimStatus(); return true; }
-        if (s === 'A') { vimState = 'INSERT'; if (rl) rl.write(null, { name: 'end' }); renderVimStatus(); return true; }
-        if (s === 'I') { vimState = 'INSERT'; if (rl) rl.write(null, { name: 'home' }); renderVimStatus(); return true; }
-        if (s === 'o') { vimState = 'INSERT'; if (rl) { rl.write(null, { name: 'end' }); } renderVimStatus(); return true; }
-
-        // Hareket
-        if (key.name === 'h' || key.name === 'left')  { if (rl) rl.write(null, { name: 'left' }); renderVimStatus(); return true; }
-        if (key.name === 'l' || key.name === 'right') { if (rl) rl.write(null, { name: 'right' }); renderVimStatus(); return true; }
-        if (s === '0' || key.name === 'home') { if (rl) rl.write(null, { name: 'home' }); renderVimStatus(); return true; }
-        if (s === '$' || key.name === 'end')  { if (rl) rl.write(null, { name: 'end' }); renderVimStatus(); return true; }
-
-        // Kelime hareketi (w/b/e — readline'da ctrl+right/left ile simüle)
-        if (s === 'w' || s === 'e') { if (rl) rl.write(null, { ctrl: true, name: 'right' }); renderVimStatus(); return true; }
-        if (s === 'b')              { if (rl) rl.write(null, { ctrl: true, name: 'left' }); renderVimStatus(); return true; }
-
-        // Silme
-        if (key.name === 'x') { if (rl) rl.write(null, { name: 'delete' }); renderVimStatus(); return true; }
-        if (s === 'D') { if (rl) rl.write(null, { ctrl: true, name: 'k' }); renderVimStatus(); return true; }
-        // dd — satırı sil (ctrl+a sonra ctrl+k)
-        if (s === 'd') {
-          if (rl) { rl.write(null, { ctrl: true, name: 'a' }); rl.write(null, { ctrl: true, name: 'k' }); }
-          renderVimStatus(); return true;
-        }
-
-        // Geçmiş (G = en son, gg = en eski)
-        if (s === 'G') { if (rl) rl.write(null, { name: 'down' }); renderVimStatus(); return true; }
-        if (s === 'g') { if (rl) rl.write(null, { name: 'up' }); renderVimStatus(); return true; }
-
-        // yy — satırı kopyala (readline'da ctrl+a ctrl+k ile kes, sonra ctrl+y ile geri koy)
-        if (s === 'y') {
-          if (rl) {
-            const line = rl.line;
-            rl.write(null, { ctrl: true, name: 'a' });
-            rl.write(null, { ctrl: true, name: 'k' });
-            // Geri yaz (yank = kopyala, satırı koru)
-            rl.write(line);
-          }
-          renderVimStatus(); return true;
-        }
-        if (s === 'p') { if (rl) rl.write(null, { ctrl: true, name: 'y' }); renderVimStatus(); return true; }
-
-        // Diğer tuşları NORMAL modda yut
-        return true;
-      }
-      return false;
-    };
-
-    // We need to intercept keypress to override readline behavior in NORMAL mode
-    const onKeypress = (s: string, key: any) => {
-      if (handleVimKey(s, key)) {
-        // Intercepted by vim handler
-        return;
-      }
-      // Bracketed paste — \x1b[200~ başlangıç, \x1b[201~ bitiş
-      if (s === '\x1b[200~') { inPaste = true; pasteBuffer = ''; return; }
-      if (s === '\x1b[201~') {
-        inPaste = false;
-        const pasted = pasteBuffer;
-        pasteBuffer = '';
-        if (!pasted.trim()) return;
-
-        const lines = pasted.split(/\r\n|\r|\n/);
-        lastPastedContent = pasted; // Orijinali sakla (Ctrl+O için)
-
-        if (rl) {
-          // Satırı temizle
-          rl.write(null, { ctrl: true, name: 'u' });
-
-          if (lines.length > 3) {
-            // Çok satırlı paste özetini göster
-            const summary = `[YAPIŞTIRILDI: ${lines.length} Satır / ${pasted.length} Karakter]`;
-            rl.write(summary);
-            // Gerçek içeriği arka planda multilineBuffer'a hazırla veya line event'te yönet
-            // Şimdilik sadece özeti yazıyoruz, kullanıcı Enter bastığında lastPastedContent kullanılacak
-          } else {
-            // Kısa paste, newline'ları boşluk yapıp yaz
-            const singleLine = pasted.replace(/\r\n|\r|\n/g, ' ').trim();
-            rl.write(singleLine);
-          }
-        }
-        return;
-      }
-      if (inPaste) { pasteBuffer += s; return; }
-
-      // Ctrl+O — son paste içeriğini göster/gizle
-      if (key?.ctrl && key?.name === 'o') {
-        if (!lastPastedContent) return;
-        pasteExpanded = !pasteExpanded;
-        if (pasteExpanded) {
-          process.stdout.write('\n' + chalk.dim('─'.repeat(50)) + '\n');
-          process.stdout.write(chalk.dim(lastPastedContent));
-          process.stdout.write('\n' + chalk.dim('─'.repeat(50)) + '\n');
-        }
-        if (rl) rl.prompt(true);
-        return;
-      }
-
-      // Ctrl+Shift+V hız bazlı algılama — sadece lastPastedContent güncelle
-      if (s && s.length === 1 && !key?.ctrl && !key?.meta) {
-        const now = Date.now();
-        const delta = now - lastKeypressTime;
-        lastKeypressTime = now;
-        if (delta < RAPID_THRESHOLD_MS) {
-          rapidCharCount++;
-          if (rapidPasteTimer) clearTimeout(rapidPasteTimer);
-          rapidPasteTimer = setTimeout(() => {
-            rapidPasteTimer = null;
-            if (rapidCharCount >= RAPID_MIN_CHARS) {
-              lastPastedContent = rl?.line ?? '';
-            }
-            rapidCharCount = 0;
-          }, 50);
+      const trimmed = line.trim();
+      if (!trimmed) { rl?.prompt(); return; }
+      if (trimmed.startsWith('/')) {
+        rl?.pause();                    // clack prompts öncesi readline'ı durdur
+        const result = await executeCommand(line, ctx);
+        process.stdin.resume();         // clack stdin'i kapattıysa geri aç
+        rl?.resume();                   // readline'ı yeniden etkinleştir
+        if (result?.output) console.log(result.output);
+        if (result?.shouldExit) process.exit(0);
+        if (result?.runAsUserMessage) {
+          await runAgentTurn(result.runAsUserMessage);
         } else {
-          rapidCharCount = 1;
+          if (rl) rl.prompt();
         }
+      } else {
+        await runAgentTurn(line);
       }
-
-      // Esc → işlemi durdur (abort)
-      if (key?.name === 'escape') {
-        if (processing && currentAbortController) {
-          currentAbortController.abort();
-          currentAbortController = null;
-          clearSpinner();
-          process.stdout.write(chalk.red('\n  ⚡ Durduruldu (Esc)\n'));
-          processing = false;
-          if (rl) { rl.setPrompt(getPromptStr()); rl.prompt(); }
-          return;
-        }
-        // Vim normal mode'dan çık
-        if (appConfig.repl?.vimMode && vimState === 'NORMAL') {
-          vimState = 'INSERT';
-          renderVimStatus();
-        }
-        return;
-      }
-      // Ctrl+R — geçmiş fuzzy arama
-      if (key?.ctrl && key?.name === 'r' && !processing) {
-        if (rl) { isProgrammaticClose = true; rl.close(); }
-        runHistorySearch().then((selected) => {
-          if (selected) {
-            createInterface();
-            // Seçilen komutu input'a yaz
-            setTimeout(() => {
-              if (rl) {
-                rl.write(selected);
-              }
-            }, 50);
-          } else {
-            createInterface();
-          }
-        });
-        return;
-      }
-      // Büyük paste algılama: 500+ karakter gelirse paste store'a yaz (sessizce)
-      if (s && s.length > 500 && !processing) {
-        storePaste(s);
-      }
-    };
-    process.stdin.on('keypress', onKeypress);
-
-    // ─── İşlem sırasında yazılan mesajı beklet ────────────────────────────────
-    // NOT: AI çalışırken yazılan metin otomatik gönderilmez — kullanıcı beklemeli.
-
-    rl.on('line', (line: string) => {
-      // ─── AI çalışırken Enter → sadece uyar, gönderme ──────────────────────
-      if (processing) {
-        if (line.trim()) {
-          process.stdout.write(chalk.dim(`  ⏸ AI çalışıyor, lütfen bekleyin… (Esc ile durdurabilirsiniz)\n`));
-        }
-        return;
-      }
-
-      // Paste devam ediyorsa gönderme
-      if (inPaste) return;
-
-      // Hızlı paste devam ediyorsa veya yeni bittiyse gönderme
-      if (rapidPasteTimer !== null) return;
-      if (rapidCharCount >= RAPID_MIN_CHARS) return;
-
-      if (vimState === 'NORMAL') {
-        rl?.prompt();
-        return;
-      }
-
-      if (line.endsWith('\\')) {
-        multilineBuffer += line.slice(0, -1) + '\n';
-        process.stdout.write(chalk.dim('... '));
-        return;
-      }
-
-      bufferedLines.push(line);
-      if (lineTimer) clearTimeout(lineTimer);
-      lineTimer = setTimeout(async () => {
-        if (processing) return;
-        
-        let finalInput = multilineBuffer + bufferedLines.join('\n');
-        bufferedLines = []; multilineBuffer = '';
-
-        // Özetlenmiş paste algıla ve gerçek içerikle değiştir
-        if (finalInput.includes('[YAPIŞTIRILDI:') && lastPastedContent) {
-          finalInput = lastPastedContent;
-        }
-
-        if (!finalInput.trim()) { if (rl) rl.prompt(true); return; }
-
-        if (finalInput.trim().startsWith('/')) {
-          // Slash command
-          // Close rl to free stdin for @clack/prompts, then recreate.
-          if (rl) {
-            isProgrammaticClose = true;
-            rl.close();
-          }
-          try {
-            const result = await executeCommand(finalInput, ctx);
-            if (result?.output) console.log(result.output);
-            if (result?.clearAndAnimate) {
-              process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
-              renderWelcomeAnimation(currentProvider, currentModel);
-            }
-            if (result?.runAsUserMessage) {
-              // Oturum devam ettirme sinyali
-              if ((result.runAsUserMessage as string).startsWith('__RESUME__')) {
-                const sid = (result.runAsUserMessage as string).slice(10);
-                const loaded = loadSession(sid);
-                if (loaded) {
-                  laneHistories.a = [...(loaded.messages ?? [])];
-                  laneHistories.b = [...(loaded.messagesLaneB ?? [])];
-                  activeLane = loaded.activeLane ?? 'a';
-                  totalUsage = loaded.tokenUsage ?? { inputTokens: 0, outputTokens: 0 };
-                  session = loaded;
-                  setAgentSessionContext(session.id);
-                  console.log(chalk.green(`✓ Oturum yüklendi: ${sid.slice(0, 8)}… (${laneHistories.a.length} mesaj)`));
-                } else {
-                  console.log(chalk.red(`✗ Oturum bulunamadı: ${sid}`));
-                }
-                createInterface();
-                return;
-              }
-              createInterface();
-              processing = true;
-              await runAgentTurn(result.runAsUserMessage);
-              return;
-            }
-            if (result?.shouldExit) process.exit(0);
-          } catch (err) {
-            console.error(renderError(err instanceof Error ? err : new Error(String(err))));
-          }
-          createInterface();
-          return;
-        }
-
-        processing = true;
-        addToHistory(finalInput);
-        recordMessage(session.id, { role: 'user', content: finalInput }); // #15
-        // rl.pause() KALDIRILDI — input alanı görünür kalsın
-        await runAgentTurn(finalInput);
-      }, 10);
     });
 
     rl.on('SIGINT', () => {
       if (currentAbortController) {
         currentAbortController.abort();
-        processing = false;
-        if (rl) { rl.setPrompt(getPromptStr()); rl.prompt(); }
-        return;
-      }
-      if (multilineBuffer) {
-        multilineBuffer = '';
-        console.log(chalk.dim('  (İptal)'));
-        if (rl) rl.prompt();
-        return;
-      }
-      if (rl && rl.line.length > 0) {
-        // clear line
+      } else if (rl && rl.line.length > 0) {
         rl.write(null, { ctrl: true, name: 'u' });
-        return;
-      }
-      console.log(chalk.dim('\n  Kapatılıyor...'));
-      saveSession(updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, { inputTokens: 0, outputTokens: 0 }));
-      clearRecovery(); // #10 normal çıkışta recovery temizle
-      console.log(chalk.dim(`  Devam etmek için: seth --devam ${session.id}`));
-      process.exit(0);
-    });
-
-    rl.on('close', () => {
-      process.stdin.removeListener('keypress', onKeypress);
-      cleanupBracketedPaste();
-      if (!isProgrammaticClose) {
-        saveSession(updateSessionMessages(session, laneHistories.a, laneHistories.b, activeLane, { inputTokens: 0, outputTokens: 0 }));
-        console.log(chalk.dim(`\n  Ctrl+D — çıkılıyor. Devam etmek için: seth --devam ${session.id}`));
+      } else {
         process.exit(0);
       }
     });
+
+    // ─── Özel tuş kombinasyonları ─────────────────────────────────────────────
+    readline.emitKeypressEvents(process.stdin, rl);
+    let ctrlXArmed = false; // Ctrl+X → Ctrl+E dizisi için
+
+    process.stdin.on('keypress', async (_str, key) => {
+      if (!key || processing) return;
+
+      // Ctrl+R — geçmiş arama
+      if (key.ctrl && key.name === 'r') {
+        ctrlXArmed = false;
+        const savedLine = rl?.line ?? '';
+        rl?.pause();
+        process.stdout.write('\n');
+        const selected = await runHistorySearch();
+        rl?.resume();
+        // history-search ekranı temizler, hoş geldin ekranını yeniden çiz
+        renderWelcomeAnimation(currentProvider, currentModel);
+        rl?.setPrompt(getPromptStr());
+        rl?.prompt();
+        if (selected) {
+          rl?.write(selected);
+        } else if (savedLine) {
+          rl?.write(savedLine);
+        }
+        return;
+      }
+
+      // Ctrl+L — ekranı temizle
+      if (key.ctrl && key.name === 'l') {
+        ctrlXArmed = false;
+        console.clear();
+        renderWelcomeAnimation(currentProvider, currentModel);
+        rl?.setPrompt(getPromptStr());
+        rl?.prompt();
+        if (rl?.line) rl.write(rl.line); // mevcut girdiyi tekrar göster
+        return;
+      }
+
+      // Ctrl+X — Ctrl+E dizisinin ilk adımı
+      if (key.ctrl && key.name === 'x') {
+        ctrlXArmed = true;
+        setTimeout(() => { ctrlXArmed = false; }, 1500);
+        return;
+      }
+
+      // Ctrl+E (Ctrl+X sonrası) — harici editörde aç
+      if (ctrlXArmed && key.ctrl && key.name === 'e') {
+        ctrlXArmed = false;
+        await openExternalEditor();
+        return;
+      }
+
+      ctrlXArmed = false;
+    });
+
+    // v3.9.0: Web UI'dan gelen mesajları dinle
+    webUIController.onUserInput((text) => {
+      if (!processing) {
+        runAgentTurn(text);
+      }
+    });
+
+    // Web UI'ya mevcut effort + settings ilet
+    webUIController.sendEffort(currentEffort);
+    webUIController.sendSettings({
+      permissionLevel: toolExecutor.getPermissionLevel(),
+      securityProfile: toolExecutor.getSecurityProfile(),
+      theme: appConfig.theme ?? 'dark',
+    });
+
+    // v3.9.0: Web UI'dan gelen slash komutlarını doğrudan işle
+    webUIController.onWebCommand(async (text) => {
+      if (processing) {
+        webUIController.sendCommandResult('⚠ İşlem devam ediyor, komut şu an çalıştırılamaz.');
+        return;
+      }
+      try {
+        const result = await executeCommand(text, ctx);
+        if (result?.output) {
+          const clean = result.output.replace(/\x1B\[[0-9;]*m/g, '');
+          webUIController.sendCommandResult(clean);
+        }
+      } catch (err: any) {
+        const msg = err?.message ?? String(err);
+        webUIController.sendCommandResult('✗ ' + msg.replace(/\x1B\[[0-9;]*m/g, ''));
+      }
+      // Komut sonrası güncel ayarları yayınla (tema/yetki/güvenlik değişmiş olabilir)
+      appConfig = loadConfig(configOverrides);
+      webUIController.sendSettings({
+        permissionLevel: toolExecutor.getPermissionLevel(),
+        securityProfile: toolExecutor.getSecurityProfile(),
+        theme: appConfig.theme ?? 'dark',
+      });
+    });
+
+    // Web UI'dan model listesi isteği
+    webUIController.onGetModels(async (provider) => {
+      try {
+        const { listModels } = await import('./providers/factory.js');
+        const p = provider as ProviderName;
+        const models = await listModels(p, appConfig.providers?.[p]);
+        webUIController.sendModels(provider, models);
+      } catch {
+        webUIController.sendModels(provider, []);
+      }
+    });
+
+    webUIController.onWebAbort(() => {
+      if (currentAbortController) {
+        currentAbortController.abort();
+      }
+    });
+
+    rl.prompt();
   }
 
   createInterface();
-}
-
-// ─── Helpers (renderer.ts'den bağımsız kopya — REPL'e özel) ──────────────────
-
-function formatToolInput(name: string, input: Record<string, unknown>): string {
-  switch (name) {
-    case 'shell': return String(input.command ?? '').slice(0, 72);
-    case 'file_read':
-    case 'file_write':
-    case 'file_edit': return String(input.path ?? '');
-    case 'search':
-    case 'grep': return `"${input.query}" in ${input.dir ?? '.'}`;
-    case 'list_directory': return String(input.path ?? '.');
-    case 'glob': return String(input.pattern ?? '');
-    case 'batch_read': return `${(input.paths as string[] | undefined)?.length ?? 0} dosya`;
-    case 'web_ara': return String(input.sorgu ?? '');
-    case 'web_search': return String(input.query ?? '');
-    case 'mcp_arac': return `${input.islem} @ ${input.sunucu}`;
-    case 'agent_spawn': return String(input.task ?? '').slice(0, 72);
-    case 'enter_plan_mode': return String(input.reason ?? '');
-    case 'exit_plan_mode': return 'plan sunum';
-    default: return JSON.stringify(input).slice(0, 72);
-  }
 }

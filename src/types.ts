@@ -138,12 +138,14 @@ export interface ToolDefinition {
 // ---------------------------------------------------------------------------
 
 export type PermissionLevel = 'full' | 'normal' | 'dar';
+export type SecurityProfile = 'safe' | 'standard' | 'pentest';
 
 export interface ToolPermissionConfig {
   readonly allowedTools: string[];
   readonly deniedTools: string[];
   readonly deniedPatterns: string[];
   readonly requireConfirmation: boolean;
+  readonly securityProfile?: SecurityProfile;
 }
 
 // ---------------------------------------------------------------------------

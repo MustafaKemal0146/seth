@@ -8,7 +8,15 @@ import { select, isCancel, confirm, text } from '@clack/prompts';
 import { writeFile } from 'fs/promises';
 import { resolve, join } from 'path';
 import { homedir } from 'os';
-import type { ProviderName, SETHConfig, ChatMessage, PermissionLevel, ThinkingStyle } from './types.js';
+import type {
+  ProviderName,
+  SETHConfig,
+  ChatMessage,
+  PermissionLevel,
+  ThinkingStyle,
+  SecurityProfile,
+  EffortLevel,
+} from './types.js';
 import { VERSION } from './version.js';
 import { todoListesiniOku } from './session-runtime.js';
 import { runRepoOzetSummary } from './tools/repo-ozet.js';
@@ -29,6 +37,10 @@ import {
 } from './config/settings.js';
 import { listSessions, setSessionTag } from './storage/session.js';
 import { THEMES, type ThemeName, setTheme, getThemeColors } from './theme.js';
+import { runDoktor } from './commands/doktor.js';
+import { checkForUpdates } from './update-check.js';
+import { listModels } from './providers/factory.js';
+import { getModelPrice } from './model-cost.js';
 
 export interface CommandContext {
   config: SETHConfig;
@@ -52,9 +64,12 @@ export interface CommandContext {
   getHistory: () => ChatMessage[];
   getPermissionLevel: () => PermissionLevel;
   setPermissionLevel: (level: PermissionLevel) => void;
+  getSecurityProfile: () => SecurityProfile;
+  setSecurityProfile: (profile: SecurityProfile) => void;
   getStats: () => { messages: number; inputTokens: number; outputTokens: number; turns: number };
   getSessionId: () => string;
   setThinkingStyle: (style: ThinkingStyle) => void;
+  setEffort: (level: EffortLevel) => void;
   setVimMode: (enabled: boolean) => void;
   getMessages?: () => ChatMessage[];
 }
@@ -72,62 +87,108 @@ const PERM_LABELS: Record<PermissionLevel, string> = {
   dar: 'Dar — her araç onay ister',
 };
 
+type HelpSection = 'Bilgi & Analiz' | 'Bellek & Oturum' | 'Ayarlar' | 'Araçlar & Sistem';
+interface CommandHelpItem {
+  readonly section: HelpSection;
+  readonly name: string;
+  readonly usage?: string;
+  readonly description: string;
+}
+
+const COMMAND_HELP_CONTRACT: readonly CommandHelpItem[] = [
+  { section: 'Bilgi & Analiz', name: 'yardım', description: 'Tüm komutları göster' },
+  { section: 'Bilgi & Analiz', name: 'özellikler', description: 'SETH yetenek raporunu göster' },
+  { section: 'Bilgi & Analiz', name: 'harita', description: 'Canlı operasyon haritası (SETH Engine)' },
+  { section: 'Bilgi & Analiz', name: 'istatistikler', description: 'Token kullanımı, maliyet tahmini, günlük kullanım' },
+  { section: 'Bilgi & Analiz', name: 'kullanım', description: 'Bugünkü kullanım limitinizi göster' },
+  { section: 'Bilgi & Analiz', name: 'bağlam', description: 'Token dağılımı, araç kullanım analizi' },
+  { section: 'Bilgi & Analiz', name: 'ara', usage: '<kelime>', description: 'Mevcut konuşmada ara' },
+  { section: 'Bilgi & Analiz', name: 'doktor', description: 'Ortam sağlığı + araç kontrolü + otomatik kurulum' },
+  { section: 'Bilgi & Analiz', name: 'repo_özet', description: 'Git: dal, son commit, diff --stat, status' },
+  { section: 'Bilgi & Analiz', name: 'güncelle', description: 'Yeni sürüm kontrolü (semver)' },
+  { section: 'Bilgi & Analiz', name: 'provider-test', usage: '[--auto]', description: 'Provider latency/model/maliyet paneli' },
+  { section: 'Bellek & Oturum', name: 'hafıza', description: 'Kalıcı belleği göster (user/project/feedback/reference)' },
+  { section: 'Bellek & Oturum', name: 'hafıza', usage: 'ekle <tip> <içerik>', description: 'Belleğe yeni giriş ekle' },
+  { section: 'Bellek & Oturum', name: 'hafıza', usage: 'sil <tip>', description: 'Belirli bellek tipini temizle' },
+  { section: 'Bellek & Oturum', name: 'hafıza-temizle', description: 'Tüm kalıcı belleği sil (onay ister)' },
+  { section: 'Bellek & Oturum', name: 'bellek', description: 'Görev listesi + oturum özeti' },
+  { section: 'Bellek & Oturum', name: 'context-temizle', description: 'Oturumu sıfırla, yeni konuşma başlat' },
+  { section: 'Bellek & Oturum', name: 'temizle', description: 'Konuşma geçmişini temizle' },
+  { section: 'Bellek & Oturum', name: 'sıkıştır', description: 'Geçmişi AI ile özetle ve sıkıştır' },
+  { section: 'Bellek & Oturum', name: 'geri', description: 'Son mesajı geri al' },
+  { section: 'Bellek & Oturum', name: 'kaydet', usage: '[md|html|txt|cast] [dosya]', description: 'Konuşmayı dışa aktar' },
+  { section: 'Bellek & Oturum', name: 'export', usage: '[json|md|html|obsidian] [dosya]', description: 'Oturumu dışa aktar' },
+  { section: 'Bellek & Oturum', name: 'geçmiş', description: 'Önceki oturumu devam ettir' },
+  { section: 'Bellek & Oturum', name: 'etiket', usage: '<isim>', description: 'Oturumu adlandır / etiketle' },
+  { section: 'Ayarlar', name: 'değiştir', description: 'Etkileşimli ayar menüsü' },
+  { section: 'Ayarlar', name: 'sağlayıcı', usage: '<isim>', description: 'Sağlayıcı değiştir' },
+  { section: 'Ayarlar', name: 'model', usage: '<isim>', description: 'Model adını doğrudan ayarla' },
+  { section: 'Ayarlar', name: 'profil', usage: '[liste|ekle <isim>|<isim>]', description: 'Kayıtlı sağlayıcı+model profilleri' },
+  { section: 'Ayarlar', name: 'modeller', description: 'Mevcut modelleri listele ve seç' },
+  { section: 'Ayarlar', name: 'araçlar', usage: '<açık|kapalı>', description: 'Araç kullanımını aç/kapat' },
+  { section: 'Ayarlar', name: 'ajan', usage: '<açık|kapalı>', description: 'Çok tur ajan modunu aç/kapat' },
+  { section: 'Ayarlar', name: 'yetki', usage: '<full|normal|dar>', description: 'İzin seviyesini ayarla' },
+  { section: 'Ayarlar', name: 'güvenlik', usage: '<safe|standard|pentest>', description: 'Güvenlik profilini ayarla' },
+  { section: 'Ayarlar', name: 'tema', description: 'Renk teması (dark, light, cyberpunk, retro, ocean, sunset)' },
+  { section: 'Ayarlar', name: 'apikey', usage: '[liste|sil <provider>]', description: 'API anahtarlarını yönet / sil' },
+  { section: 'Ayarlar', name: 'context', usage: '<miktar>', description: 'Token bütçesi (örn: 500k, 2M)' },
+  { section: 'Araçlar & Sistem', name: 'hook', usage: '[liste|örnek]', description: 'Hook sistemi (PreToolUse/PostToolUse)' },
+  { section: 'Araçlar & Sistem', name: 'rapor', usage: 'pdf', description: 'Güvenlik taramasını LaTeX/PDF olarak aktar' },
+  { section: 'Araçlar & Sistem', name: 'görevler', description: 'Arka plan görevlerini listele' },
+  { section: 'Araçlar & Sistem', name: 'yan-sorgu', usage: '<soru>', description: 'Konuşmayı bozmadan hızlı soru sor' },
+  { section: 'Araçlar & Sistem', name: 'sor', description: 'İstek sihirbazını başlat' },
+  { section: 'Araçlar & Sistem', name: 'dusunme', usage: '[minimal|animated]', description: 'Düşünme göstergesini aç/kapat' },
+  { section: 'Araçlar & Sistem', name: 'effort', usage: '[low|medium|high|max]', description: 'Düşünme derinliği' },
+  { section: 'Araçlar & Sistem', name: 'cron', usage: '[liste|ekle|sil]', description: 'Periyodik görevleri yönet' },
+  { section: 'Araçlar & Sistem', name: 'cd', usage: '<dizin>', description: 'Çalışma dizinini değiştir' },
+  { section: 'Araçlar & Sistem', name: 'pwd', description: 'Mevcut dizini göster' },
+  { section: 'Araçlar & Sistem', name: 'nasılçalışır', description: 'Canlı demo (typewriter animasyonu)' },
+  { section: 'Araçlar & Sistem', name: 'kabuk-kurulum', description: 'Bash/Zsh/Fish shell tamamlamasını kur' },
+  { section: 'Araçlar & Sistem', name: 'cikis', description: 'Uygulamadan çık' },
+];
+
+const HELP_SECTION_ORDER: readonly HelpSection[] = ['Bilgi & Analiz', 'Bellek & Oturum', 'Ayarlar', 'Araçlar & Sistem'];
+
+export function getPublicSlashCommands(): string[] {
+  return Array.from(new Set(COMMAND_HELP_CONTRACT.map((x) => `/${x.name}`)));
+}
+
+export function getPublicCommandNames(): string[] {
+  return Array.from(new Set(COMMAND_HELP_CONTRACT.map((x) => x.name)));
+}
+
+function formatHelpLines(): string[] {
+  const lines: string[] = [];
+  for (const section of HELP_SECTION_ORDER) {
+    lines.push(chalk.dim(`  ─── ${section} ─────────────────────────────────────────`));
+    const items = COMMAND_HELP_CONTRACT.filter((x) => x.section === section);
+    for (const item of items) {
+      const usage = item.usage ? ` ${chalk.dim(item.usage)}` : '';
+      lines.push(`  ${cmd(`/${item.name}`)}${usage.padEnd(Math.max(1, 34 - item.name.length))} ${item.description}`);
+    }
+    lines.push('');
+  }
+  return lines;
+}
+
+function parseTokenBudget(input: string): number | null {
+  const normalized = input.trim().toLowerCase().replace(/\s+/g, '');
+  if (!normalized) return null;
+  const m = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+  if (!m) return null;
+  const base = Number(m[1]);
+  if (!Number.isFinite(base) || base <= 0) return null;
+  const mult = m[2] === 'k' ? 1_000 : m[2] === 'm' ? 1_000_000 : m[2] === 'b' ? 1_000_000_000 : 1;
+  return Math.round(base * mult);
+}
+
 // ─── Checkbox seçici (raw mode, boşluk=seç, Enter=onayla) ───────────────────
 export const COMMANDS: Record<string, (args: string, ctx: CommandContext) => Promise<CommandResult> | CommandResult> = {
   yardım: (_args, ctx) => ({
     output: [
       chalk.bold(`SETH v${VERSION} — Komut Rehberi`),
       '',
-      chalk.dim('  ─── Bilgi & Analiz ───────────────────────────────────────────'),
-      `  ${cmd('/özellikler')}                    SETH yetenek raporunu göster`,
-      `  ${cmd('/harita')}                        Canlı operasyon haritası (SETH Engine)`,
-      `  ${cmd('/istatistikler')}                 Token kullanımı, maliyet tahmini, günlük kullanım`,
-      `  ${cmd('/kullanım')}                      Bugünkü kullanım limitinizi göster`,
-      `  ${cmd('/bağlam')}                        Token dağılımı, araç kullanım analizi`,
-      `  ${cmd('/ara')} ${chalk.dim('<kelime>')}                  Mevcut konuşmada ara`,
-      `  ${cmd('/doktor')}                        Ortam sağlığı + araç kontrolü + otomatik kurulum`,
-      `  ${cmd('/repo_özet')}                     Git: dal, son commit, diff --stat, status`,
-      `  ${cmd('/güncelle')}                      Yeni sürüm kontrolü (semver)`,
-      '',
-      chalk.dim('  ─── Bellek & Oturum ──────────────────────────────────────────'),
-      `  ${cmd('/hafıza')}                        Kalıcı belleği göster (user/project/feedback/reference)`,
-      `  ${cmd('/hafıza')} ${chalk.dim('ekle <tip> <içerik>')}    Belleğe yeni giriş ekle`,
-      `  ${cmd('/hafıza')} ${chalk.dim('sil <tip>')}              Belirli bellek tipini temizle`,
-      `  ${cmd('/hafıza-temizle')}                Tüm kalıcı belleği sil (onay ister)`,
-      `  ${cmd('/bellek')}                        Görev listesi + oturum özeti`,
-      `  ${cmd('/context-temizle')}               Oturumu sıfırla, yeni konuşma başlat`,
-      `  ${cmd('/temizle')}                       Konuşma geçmişini temizle`,
-      `  ${cmd('/sıkıştır')}                      Geçmişi AI ile özetle ve sıkıştır`,
-      `  ${cmd('/geri')}                          Son mesajı geri al`,
-      `  ${cmd('/kaydet')} ${chalk.dim('[md|html|txt] [dosya]')}  Konuşmayı dışa aktar`,
-      `  ${cmd('/geçmiş')}                        Önceki oturumu devam ettir`,
-      `  ${cmd('/etiket')} ${chalk.dim('<isim>')}                 Oturumu adlandır / etiketle`,
-      '',
-      chalk.dim('  ─── Ayarlar ──────────────────────────────────────────────────'),
-      `  ${cmd('/değiştir')}                      Etkileşimli ayar menüsü`,
-      `  ${cmd('/sağlayıcı')} ${chalk.dim('<isim>')}             Sağlayıcı: claude, gemini, openai, ollama, groq, deepseek, mistral, xai, lmstudio, openrouter`,
-      `  ${cmd('/model')} ${chalk.dim('<isim>')}                 Model adını doğrudan ayarla`,
-      `  ${cmd('/profil')}                        Kayıtlı sağlayıcı+model profilleri`,
-      `  ${cmd('/modeller')}                      Mevcut modelleri listele ve seç`,
-      `  ${cmd('/araçlar')} ${chalk.dim('<açık|kapalı>')}        Araç kullanımını aç/kapat`,
-      `  ${cmd('/ajan')} ${chalk.dim('<açık|kapalı>')}           Çok tur ajan modunu aç/kapat`,
-      `  ${cmd('/yetki')} ${chalk.dim('<full|normal|dar>')}      İzin seviyesini ayarla`,
-      `  ${cmd('/tema')}                          Renk teması (dark, light, cyberpunk, retro, ocean, sunset)`,
-      `  ${cmd('/apikey')}                        API anahtarlarını yönet / sil`,
-      `  ${cmd('/context')} ${chalk.dim('<miktar>')}             Token bütçesi (örn: 500k, 2M)`,
-      '',
-      chalk.dim('  ─── Araçlar & Sistem ─────────────────────────────────────────'),
-      `  ${cmd('/hook')} ${chalk.dim('[liste|örnek]')}           Hook sistemi (PreToolUse/PostToolUse)`,
-      `  ${cmd('/rapor')} ${chalk.dim('pdf')}                    Güvenlik taramasını LaTeX/PDF olarak aktar`,
-      `  ${cmd('/görevler')}                      Arka plan görevlerini listele`,
-      `  ${cmd('/yan-sorgu')} ${chalk.dim('<soru>')}             Konuşmayı bozmadan hızlı soru sor`,
-      `  ${cmd('/sor')}                           İstek sihirbazını başlat`,
-      `  ${cmd('/dusunme')}                       Düşünme göstergesini aç/kapat`,
-      `  ${cmd('/cd')} ${chalk.dim('<dizin>')}                   Çalışma dizinini değiştir`,
-      `  ${cmd('/pwd')}                           Mevcut dizini göster`,
-      `  ${cmd('/nasılçalışır')}                  Canlı demo (typewriter animasyonu)`,
-      `  ${cmd('/cikis')}                         Uygulamadan çık`,
-      '',
+      ...formatHelpLines(),
       chalk.dim('  ─── Kısayollar ───────────────────────────────────────────────'),
       chalk.dim('  Ctrl+C   İşlemi iptal et'),
       chalk.dim('  Ctrl+D   Çıkış'),
@@ -136,12 +197,12 @@ export const COMMANDS: Record<string, (args: string, ctx: CommandContext) => Pro
       chalk.dim('  ↑↓       Geçmiş komutlar'),
       chalk.dim('  \\        Satır sonu — çok satırlı girdi'),
       '',
-      chalk.dim(`  İzin: ${ctx.getPermissionLevel()}  •  Sağlayıcı: ${ctx.currentProvider}  •  Model: ${ctx.currentModel}`),
+      chalk.dim(`  İzin: ${ctx.getPermissionLevel()}  •  Güvenlik: ${ctx.getSecurityProfile()}  •  Sağlayıcı: ${ctx.currentProvider}  •  Model: ${ctx.currentModel}`),
     ].join('\n'),
   }),
   özellikler: async () => ({
     output: `
-🎯 SETH v${VERSION} 'LEVIATHAN' — Yetenek Raporu (v3.8.17)
+🎯 SETH v${VERSION} 'LEVIATHAN' — Yetenek Raporu (v3.8.18)
 
 1. Siber Harekat (Multi-Target Campaign)
    • IP aralıkları (CIDR) ve wildcard alan adları (*.site.com) üzerinde otonom harekat.
@@ -191,6 +252,142 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
     return { output: output + '\n' };
   },
 
+  kullanım: (_args, ctx) => {
+    const s = ctx.getStats();
+    const used = s.inputTokens + s.outputTokens;
+    const budget = ctx.getContextBudgetTokens();
+    const remain = Math.max(0, budget - used);
+    const pct = budget > 0 ? Math.min(100, Math.round((used / budget) * 100)) : 0;
+    return {
+      output: [
+        chalk.bold('📈 Kullanım'),
+        '',
+        `  Kullanılan token : ${chalk.cyan(used.toLocaleString())}`,
+        `  Bütçe            : ${chalk.cyan(budget.toLocaleString())}`,
+        `  Kalan            : ${chalk.cyan(remain.toLocaleString())}`,
+        `  Doluluk          : ${pct >= 85 ? chalk.red(`${pct}%`) : pct >= 60 ? chalk.yellow(`${pct}%`) : chalk.green(`${pct}%`)}`,
+      ].join('\n'),
+    };
+  },
+
+  bağlam: (_args, ctx) => {
+    const s = ctx.getStats();
+    const used = s.inputTokens + s.outputTokens;
+    const budget = ctx.getContextBudgetTokens();
+    const lane = ctx.getActiveLane().toUpperCase();
+    const messages = ctx.getHistory().length;
+    const pct = budget > 0 ? Math.min(100, Math.round((used / budget) * 100)) : 0;
+    return {
+      output: [
+        chalk.bold('🧭 Bağlam Durumu'),
+        '',
+        `  Aktif lane       : ${chalk.cyan(lane)}`,
+        `  Mesaj sayısı     : ${chalk.cyan(messages.toLocaleString())}`,
+        `  Giriş/Çıkış      : ${chalk.dim(s.inputTokens.toLocaleString())} / ${chalk.dim(s.outputTokens.toLocaleString())}`,
+        `  Toplam token     : ${chalk.cyan(used.toLocaleString())} / ${chalk.cyan(budget.toLocaleString())}`,
+        `  Bağlam doluluğu  : ${pct >= 85 ? chalk.red(`${pct}%`) : pct >= 60 ? chalk.yellow(`${pct}%`) : chalk.green(`${pct}%`)}`,
+      ].join('\n'),
+    };
+  },
+
+  doktor: async (_args, ctx) => runDoktor(ctx),
+
+  repo_özet: async (_args, ctx) => runRepoOzetSummary(ctx.getCwd()),
+
+  güncelle: async () => {
+    const result = await checkForUpdates();
+    if (result?.hasUpdate) {
+      return {
+        output: [
+          chalk.yellow('⬆️ Yeni sürüm mevcut'),
+          '',
+          `  Güncel sürüm: ${chalk.cyan(VERSION)}`,
+          `  Yeni sürüm  : ${chalk.green(result.latestVersion)}`,
+          '',
+          chalk.dim('  Güncelleme: npm i -g seth'),
+        ].join('\n'),
+      };
+    }
+    return { output: chalk.green(`✓ Güncel sürümdesiniz (v${VERSION})`) };
+  },
+
+  'provider-test': async (args, ctx) => {
+    const auto = args.includes('--auto');
+    const cfg = loadConfig();
+    const localProviders: ProviderName[] = ['ollama', 'lmstudio', 'copilot'];
+    const providers = Object.keys(cfg.providers) as ProviderName[];
+    const testable = providers.filter((p) => localProviders.includes(p) || Boolean(cfg.providers[p]?.apiKey));
+
+    if (testable.length === 0) {
+      return { output: chalk.yellow('Test edilecek sağlayıcı bulunamadı. API anahtarı tanımlı değil.') };
+    }
+
+    type Probe = {
+      provider: ProviderName;
+      ok: boolean;
+      latencyMs: number;
+      model: string;
+      modelCount: number;
+      priceScore: number;
+      error?: string;
+    };
+    const probes: Probe[] = [];
+
+    for (const provider of testable) {
+      const startedAt = Date.now();
+      const cfgProvider = cfg.providers[provider];
+      try {
+        const models = await listModels(provider, cfgProvider);
+        const latencyMs = Date.now() - startedAt;
+        const selectedModel = models[0] ?? resolveModel(provider, cfg);
+        const unitPrice = getModelPrice(selectedModel, provider);
+        probes.push({
+          provider,
+          ok: true,
+          latencyMs,
+          model: selectedModel,
+          modelCount: models.length,
+          priceScore: unitPrice.input + unitPrice.output,
+        });
+      } catch (err) {
+        probes.push({
+          provider,
+          ok: false,
+          latencyMs: Date.now() - startedAt,
+          model: resolveModel(provider, cfg),
+          modelCount: 0,
+          priceScore: Number.POSITIVE_INFINITY,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const sorted = [...probes].sort((a, b) => (a.latencyMs + a.priceScore * 100) - (b.latencyMs + b.priceScore * 100));
+    const fallback = sorted.find((p) => p.ok && p.provider !== ctx.currentProvider);
+
+    if (auto && fallback) {
+      saveConfig({ fallbackProvider: fallback.provider, fallbackModel: fallback.model });
+    }
+
+    const lines = [chalk.bold('🛰️ Provider Operasyon Paneli'), ''];
+    for (const p of sorted) {
+      const status = p.ok ? chalk.green('✓') : chalk.red('✗');
+      const cost = Number.isFinite(p.priceScore) ? p.priceScore.toFixed(3) : 'n/a';
+      const modelInfo = p.modelCount > 0 ? `${p.modelCount} model` : 'model yok';
+      lines.push(`  ${status} ${p.provider.padEnd(10)} ${String(p.latencyMs).padStart(4)}ms  ${modelInfo.padEnd(12)}  birim-maliyet=${cost}`);
+      if (!p.ok && p.error) lines.push(`      ${chalk.dim(p.error.slice(0, 140))}`);
+    }
+    lines.push('');
+    if (fallback) {
+      lines.push(`  Önerilen fallback: ${chalk.cyan(fallback.provider)} / ${chalk.cyan(fallback.model)}`);
+      if (auto) lines.push(chalk.green('  ✓ Fallback ayarı otomatik kaydedildi.'));
+      else lines.push(chalk.dim('  Otomatik kaydetmek için: /provider-test --auto'));
+    } else {
+      lines.push(chalk.dim('  Uygun fallback adayı bulunamadı.'));
+    }
+    return { output: lines.join('\n') };
+  },
+
   yetki: async (args, ctx) => {
     const level = args.trim().toLowerCase();
     const valid: PermissionLevel[] = ['full', 'normal', 'dar'];
@@ -237,6 +434,10 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
       persistProviderAndModel(p as ProviderName, ctx.currentModel);
       return { output: chalk.green(`✓ Sağlayıcı değiştirildi: ${p}`) };
     }
+    const validProviders: ProviderName[] = ['claude', 'openai', 'gemini', 'ollama', 'groq', 'deepseek', 'mistral', 'xai', 'lmstudio', 'openrouter', 'copilot'];
+    if (!validProviders.includes(name)) {
+      return { output: chalk.red(`Bilinmeyen sağlayıcı: ${name}`) };
+    }
     await ctx.setProvider(name);
     persistProviderAndModel(name, ctx.currentModel);
     return { output: chalk.green(`✓ Sağlayıcı değiştirildi: ${name}`) };
@@ -250,19 +451,25 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
     return { output: chalk.green(`✓ Model ayarlandı: ${model}`) };
   },
 
-  modeller: async (_args, ctx) => {
+  modeller: async (args, ctx) => {
     try {
       const { listModels } = await import('./providers/factory.js');
       const models = await listModels(ctx.currentProvider, ctx.config.providers[ctx.currentProvider]);
-      if (models.length === 0) return { output: chalk.yellow('Model listesi alınamadı veya boş.') };
-      const selected = await select({
-        message: `${ctx.currentProvider} için model seçin:`,
-        options: models.map((m: string) => ({ value: m, label: m })),
-      });
-      if (isCancel(selected)) return { output: chalk.dim('İptal edildi.') };
-      ctx.setModel(selected as string);
-      persistProviderAndModel(ctx.currentProvider, selected as string);
-      return { output: chalk.green(`✓ Model seçildi: ${selected}`) };
+      if (!args.trim()) {
+        if (models.length === 0) return { output: chalk.yellow('Model listesi alınamadı veya boş.') };
+        const selected = await select({
+          message: `${ctx.currentProvider} için model seçin:`,
+          options: models.map((m: string) => ({ value: m, label: m })),
+        });
+        if (isCancel(selected)) return { output: chalk.dim('İptal edildi.') };
+        ctx.setModel(selected as string);
+        persistProviderAndModel(ctx.currentProvider, selected as string);
+        return { output: chalk.green(`✓ Model seçildi: ${selected}`) };
+      }
+      const model = args.trim();
+      ctx.setModel(model);
+      persistProviderAndModel(ctx.currentProvider, model);
+      return { output: chalk.green(`✓ Model seçildi: ${model}`) };
     } catch (err) {
       return { output: chalk.red(`Hata: ${err instanceof Error ? err.message : String(err)}`) };
     }
@@ -275,6 +482,7 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
         { value: 'provider', label: 'Sağlayıcı (Provider)' },
         { value: 'model',    label: 'Model' },
         { value: 'perm',     label: 'İzin Seviyesi' },
+        { value: 'security', label: 'Güvenlik Profili' },
         { value: 'theme',    label: 'Tema' },
         { value: 'tools',    label: 'Araçlar (Aç/Kapat)' },
       ],
@@ -285,6 +493,7 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
       case 'provider': return COMMANDS.sağlayıcı('', ctx);
       case 'model':    return COMMANDS.modeller('', ctx);
       case 'perm':     return COMMANDS.yetki('', ctx);
+      case 'security': return COMMANDS.güvenlik('', ctx);
       case 'theme':    return COMMANDS.tema('', ctx);
       case 'tools': {
         const toggle = ctx.toolsEnabled ? 'Kapat' : 'Aç';
@@ -297,6 +506,106 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
       }
     }
     return { output: '' };
+  },
+
+  araçlar: async (args, ctx) => {
+    const sub = args.trim().toLowerCase();
+    if (!sub) {
+      return { output: chalk.dim(`Araçlar: ${ctx.toolsEnabled ? 'açık' : 'kapalı'} (kullanım: /araçlar <açık|kapalı>)`) };
+    }
+    if (!['açık', 'acik', 'kapalı', 'kapali'].includes(sub)) {
+      return { output: chalk.red('Kullanım: /araçlar <açık|kapalı>') };
+    }
+    const enabled = sub === 'açık' || sub === 'acik';
+    ctx.setToolsEnabled(enabled);
+    return { output: chalk.green(`✓ Araçlar ${enabled ? 'açıldı' : 'kapatıldı'}.`) };
+  },
+
+  ajan: async (args, ctx) => {
+    const sub = args.trim().toLowerCase();
+    if (!sub) {
+      return { output: chalk.dim(`Ajan modu: ${ctx.agentEnabled ? 'açık' : 'kapalı'} (kullanım: /ajan <açık|kapalı>)`) };
+    }
+    if (!['açık', 'acik', 'kapalı', 'kapali'].includes(sub)) {
+      return { output: chalk.red('Kullanım: /ajan <açık|kapalı>') };
+    }
+    const enabled = sub === 'açık' || sub === 'acik';
+    ctx.setAgentEnabled(enabled);
+    return { output: chalk.green(`✓ Ajan modu ${enabled ? 'açıldı' : 'kapatıldı'}.`) };
+  },
+
+  güvenlik: async (args, ctx) => {
+    const sub = args.trim().toLowerCase();
+    const profiles: SecurityProfile[] = ['safe', 'standard', 'pentest'];
+    if (!sub) {
+      const selected = await select({
+        message: `Güvenlik profilini seçin (mevcut: ${ctx.getSecurityProfile()}):`,
+        options: profiles.map((p) => ({ value: p, label: p })),
+      });
+      if (isCancel(selected)) return { output: chalk.dim('İptal edildi.') };
+      ctx.setSecurityProfile(selected as SecurityProfile);
+      saveConfig({ tools: { ...ctx.config.tools, securityProfile: selected as SecurityProfile } });
+      return { output: chalk.green(`✓ Güvenlik profili: ${selected}`) };
+    }
+    if (!profiles.includes(sub as SecurityProfile)) {
+      return { output: chalk.red('Geçersiz profil: safe, standard, pentest') };
+    }
+    ctx.setSecurityProfile(sub as SecurityProfile);
+    saveConfig({ tools: { ...ctx.config.tools, securityProfile: sub as SecurityProfile } });
+    return { output: chalk.green(`✓ Güvenlik profili: ${sub}`) };
+  },
+
+  apikey: async (args, _ctx) => {
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase() ?? 'liste';
+    const cfg = loadConfig();
+    const providers = Object.keys(cfg.providers) as ProviderName[];
+
+    if (sub === 'liste') {
+      const lines = [chalk.bold('🔑 API Key Durumu'), ''];
+      for (const p of providers) {
+        const has = Boolean(cfg.providers[p]?.apiKey);
+        lines.push(`  ${has ? chalk.green('✓') : chalk.red('✗')} ${p}`);
+      }
+      lines.push('', chalk.dim('Silmek için: /apikey sil <provider>'));
+      return { output: lines.join('\n') };
+    }
+
+    if (sub === 'set') {
+      const providerArg = parts[1] as ProviderName | undefined;
+      const key = parts.slice(2).join(' ').trim();
+      if (!providerArg || !providers.includes(providerArg) || !key) {
+        return { output: chalk.red('Kullanım: /apikey set <provider> <key>') };
+      }
+      saveConfig({ providers: { [providerArg]: { apiKey: key } } as SETHConfig['providers'] });
+      return { output: chalk.green(`✓ ${providerArg} API anahtarı kaydedildi.`) };
+    }
+
+    if (sub === 'sil') {
+      const providerArg = parts[1] as ProviderName | undefined;
+      if (!providerArg || !providers.includes(providerArg)) {
+        return { output: chalk.red(`Geçersiz provider. Seçenekler: ${providers.join(', ')}`) };
+      }
+      const ok = await confirm({ message: `${providerArg} API anahtarı silinsin mi?` });
+      if (isCancel(ok) || !ok) return { output: chalk.dim('İptal edildi.') };
+      deleteApiKey(providerArg);
+      return { output: chalk.green(`✓ ${providerArg} API anahtarı silindi.`) };
+    }
+
+    return { output: chalk.red('Kullanım: /apikey [liste|set <provider> <key>|sil <provider>]') };
+  },
+
+  context: (args, ctx) => {
+    const raw = args.trim();
+    if (!raw) {
+      return { output: chalk.dim(`Context bütçesi: ${ctx.getContextBudgetTokens().toLocaleString()} token`) };
+    }
+    const value = parseTokenBudget(raw);
+    if (!value || value < 10_000) {
+      return { output: chalk.red('Geçersiz değer. Örnek: 500k, 2m, 100000') };
+    }
+    ctx.setContextBudgetTokens(value);
+    return { output: chalk.green(`✓ Context bütçesi ayarlandı: ${value.toLocaleString()} token`) };
   },
 
   temizle: (_args, ctx) => {
@@ -584,6 +893,12 @@ ${rows}
 
   pwd: (_args, ctx) => ({ output: ctx.getCwd() }),
 
+  'web-aç': async () => {
+    const { startWebServer } = await import('./web/server.js');
+    await startWebServer();
+    return { output: chalk.cyan('  🌐 Web arayüzü başlatılıyor...') };
+  },
+
   nasılçalışır: async () => {
     await runNasilCalisirAnimation();
     return { output: '' };
@@ -692,6 +1007,36 @@ ${rows}
     return { runAsUserMessage: args.trim() };
   },
 
+  'yan-sorgu': async (args, ctx) => COMMANDS.yan(args, ctx),
+
+  sor: async (args) => {
+    const result = await runSorWizard(args.trim());
+    if (result.cancelled) return { output: chalk.dim('İptal edildi.') };
+    const prompt = [
+      `Hedef: ${result.goal}`,
+      `Yığın: ${result.dil}`,
+      result.note || 'Ek not yok.',
+    ].join('\n');
+    return { output: chalk.green('✓ Sihirbaz tamamlandı.'), runAsUserMessage: prompt };
+  },
+
+  dusunme: async (args, ctx) => {
+    const sub = args.trim().toLowerCase();
+    if (!sub) {
+      return { output: chalk.dim('Kullanım: /dusunme [minimal|animated]') };
+    }
+    if (sub !== 'minimal' && sub !== 'animated') {
+      return { output: chalk.red('Geçersiz seçenek: minimal veya animated') };
+    }
+    ctx.setThinkingStyle(sub as ThinkingStyle);
+    return { output: chalk.green(`✓ Düşünme stili: ${sub}`) };
+  },
+
+  görevler: async (_args, ctx) => {
+    const { taskListTool } = await import('./tools/background-tasks.js');
+    return taskListTool.execute({}, ctx.getCwd());
+  },
+
   effort: async (args, ctx) => {
     const level = args.trim().toLowerCase();
     const levels = ['low', 'medium', 'high', 'max'];
@@ -707,31 +1052,45 @@ ${rows}
         options: levels.map(l => ({ value: l, label: `${l.padEnd(8)} — ${desc[l]}` })),
       });
       if (isCancel(selected)) return { output: chalk.gray('İptal edildi.') };
-      ctx.setThinkingStyle(selected as any);
-      saveConfig({ effort: selected as any });
+      ctx.setEffort(selected as EffortLevel);
       return { output: chalk.green(`✓ Effort seviyesi: ${selected}`) };
     }
     if (!levels.includes(level)) return { output: chalk.red('Geçersiz seviye: low, medium, high, max') };
-    ctx.setThinkingStyle(level as any);
-    saveConfig({ effort: level as any });
+    ctx.setEffort(level as EffortLevel);
     return { output: chalk.green(`✓ Effort seviyesi: ${level}`) };
   },
 
-  tema: async (_args, _ctx) => {
+  tema: async (args, _ctx) => {
     const themeNames = Object.keys(THEMES) as ThemeName[];
     const descriptions: Record<string, string> = {
       dark: 'Varsayılan koyu mavi', light: 'Açık tema',
       cyberpunk: 'Matrix / neon', retro: 'Retro turuncu',
       ocean: 'Okyanus mavisi', sunset: 'Gün batımı pembe',
     };
-    const options = themeNames.map(name => ({
-      value: name,
-      label: `${name.padEnd(10)} — ${descriptions[name] ?? name}`,
-    }));
-    const selected = await select({ message: 'Tema seçin:', options });
-    if (isCancel(selected)) return { output: chalk.gray('İptal edildi.') };
-    setTheme(selected as ThemeName);
-    saveConfig({ theme: selected as string });
+    if (!args.trim()) {
+      const options = themeNames.map(name => ({
+        value: name,
+        label: `${name.padEnd(10)} — ${descriptions[name] ?? name}`,
+      }));
+      const selected = await select({ message: 'Tema seçin:', options });
+      if (isCancel(selected)) return { output: chalk.gray('İptal edildi.') };
+      setTheme(selected as ThemeName);
+      saveConfig({ theme: selected as string });
+      const colors = getThemeColors();
+      const preview = [
+        colors.navy('■ Ana'), colors.navyBright('■ İkincil'),
+        colors.success('■ Başarı'), colors.warning('■ Uyarı'),
+        colors.error('■ Hata'), colors.cmd('■ Komut'),
+        colors.toolAccent('■ Araç'), colors.sparkle('■ Vurgu'),
+      ].join('  ');
+      return { output: `${colors.success('✓')} Tema: ${colors.navyBright(selected as string)}\n\n  ${preview}` };
+    }
+    const themeName = args.trim().toLowerCase() as ThemeName;
+    if (!themeNames.includes(themeName)) {
+      return { output: chalk.red(`Bilinmeyen tema: ${themeName}\nSeçenekler: ${themeNames.join(', ')}`) };
+    }
+    setTheme(themeName);
+    saveConfig({ theme: themeName });
     const colors = getThemeColors();
     const preview = [
       colors.navy('■ Ana'), colors.navyBright('■ İkincil'),
@@ -739,7 +1098,7 @@ ${rows}
       colors.error('■ Hata'), colors.cmd('■ Komut'),
       colors.toolAccent('■ Araç'), colors.sparkle('■ Vurgu'),
     ].join('  ');
-    return { output: `${colors.success('✓')} Tema: ${colors.navyBright(selected as string)}\n\n  ${preview}` };
+    return { output: `${colors.success('✓')} Tema: ${colors.navyBright(themeName)}\n\n  ${preview}` };
   },
 
   geçmiş: async () => {
@@ -850,25 +1209,50 @@ ${chalk.dim('Yanıt süresi: 24 saat içinde • Çalışma dili: Türkçe, İng
 `,
   }),
 
-  // Geriye uyumluluk için eski komutlar (alias)
-  yardim: (...args) => COMMANDS.yardım(...args),
-  ozellikler: (...args) => COMMANDS.özellikler(...args),
-  saglayici: (...args) => COMMANDS.sağlayıcı(...args),
-  saglayicilar: (...args) => (COMMANDS as any).sağlayıcılar(...args),
-  araclar: (...args) => COMMANDS.araçlar(...args),
-  degistir: (...args) => COMMANDS.değiştir(...args),
-  sikistir: (...args) => COMMANDS.sıkıştır(...args),
-  repo_ozet: (...args) => COMMANDS.repo_özet(...args),
-  nasilcalisir: (...args) => COMMANDS.nasılçalışır(...args),
-  gecmis: (...args) => COMMANDS.geçmiş(...args),
-  guncelle: (...args) => COMMANDS.güncelle(...args),
-  istatistik: (...args) => COMMANDS.istatistikler(...args),
-  rapor_pdf: (...args) => COMMANDS.rapor(...args),
-  hafiza: (...args) => (COMMANDS as any)['hafıza'](...args),
-  'hafiza-temizle': (...args) => (COMMANDS as any)['hafıza-temizle'](...args),
-  baglam: (...args) => (COMMANDS as any)['bağlam'](...args),
-  gorevler: (...args) => (COMMANDS as any)['görevler'](...args),
+  cikis: async (_args, _ctx) => COMMANDS.çıkış('', _ctx),
+
+  'kabuk-kurulum': async (_args, _ctx) => {
+    const { setupShellCompletion } = await import('./shell-completion.js');
+    const result = await setupShellCompletion();
+    const output = result.lines
+      .map(l => l.startsWith('✓') ? chalk.green(l) : chalk.dim(l))
+      .join('\n');
+    return { output };
+  },
 };
+
+export const COMMAND_ALIASES: Record<string, string> = {
+  yardim: 'yardım',
+  ozellikler: 'özellikler',
+  saglayici: 'sağlayıcı',
+  saglayicilar: 'sağlayıcı',
+  araclar: 'araçlar',
+  degistir: 'değiştir',
+  sikistir: 'sıkıştır',
+  repo_ozet: 'repo_özet',
+  nasilcalisir: 'nasılçalışır',
+  gecmis: 'geçmiş',
+  guncelle: 'güncelle',
+  istatistik: 'istatistikler',
+  rapor_pdf: 'rapor',
+  hafiza: 'hafıza',
+  'hafiza-temizle': 'hafıza-temizle',
+  baglam: 'bağlam',
+  gorevler: 'görevler',
+  yan: 'yan-sorgu',
+  guvenlik: 'güvenlik',
+  provider_test: 'provider-test',
+};
+
+for (const [alias, target] of Object.entries(COMMAND_ALIASES)) {
+  const targetHandler = COMMANDS[target];
+  if (typeof targetHandler !== 'function') {
+    throw new Error(`Alias hedefi bulunamadı: ${alias} -> ${target}`);
+  }
+  if (!COMMANDS[alias]) {
+    COMMANDS[alias] = (args, ctx) => targetHandler(args, ctx);
+  }
+}
 
 export async function executeCommand(input: string, ctx: CommandContext): Promise<CommandResult | null> {
   const { cmd, args } = parseCommand(input);
