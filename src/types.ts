@@ -38,7 +38,12 @@ export interface ToolResultBlock {
   readonly is_error?: boolean;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export interface ReasoningBlock {
+  readonly type: 'reasoning';
+  readonly reasoning: string;
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ReasoningBlock;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -65,6 +70,10 @@ export interface ChatOptions {
   readonly maxTokens?: number;
   readonly temperature?: number;
   readonly abortSignal?: AbortSignal;
+  /** DeepSeek thinking mode toggle */
+  readonly thinkingEnabled?: boolean;
+  /** DeepSeek reasoning effort (thinking açıkken geçerli) */
+  readonly reasoningEffort?: 'high' | 'max';
 }
 
 export interface ChatResponse {

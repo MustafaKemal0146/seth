@@ -89,6 +89,8 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
   let toolsEnabled = true;
   let agentEnabled = appConfig.agent.enabled;
   let currentEffort = appConfig.effort ?? 'medium';
+  let deepseekThinking = true;
+  let deepseekReasoningEffort: 'high' | 'max' = 'high';
   let currentMaxConcurrentTools = 5;
   let provider: LLMProvider;
   let totalTurns = 0;
@@ -181,11 +183,15 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
     toolsEnabled,
     agentEnabled,
     setProvider: async (name) => {
-      provider = await createProvider(name, appConfig);
+      const freshConfig = loadConfig();
+      provider = await createProvider(name, freshConfig);
       currentProvider = name; ctx.currentProvider = name;
       currentModel = resolveModel(name, appConfig); ctx.currentModel = currentModel;
       persistProviderAndModel(name, currentModel);
       if (rl) rl.setPrompt(getPromptStr());
+      if (laneHistories[activeLane].length > 0) {
+        console.log(chalk.dim('  Bilgi: Geçmiş konuşma korundu. Temizlemek için /context-temizle'));
+      }
     },
     setModel: (m) => { currentModel = m; ctx.currentModel = m; if (rl) rl.setPrompt(getPromptStr()); },
     setToolsEnabled: (e) => { toolsEnabled = e; ctx.toolsEnabled = e; },
@@ -243,7 +249,20 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
     }),
     getSessionId: () => session.id,
     setThinkingStyle: (s) => { saveConfig({ repl: { thinkingStyle: s } }); appConfig = loadConfig(configOverrides); },
-    setEffort: (level) => { currentEffort = level; saveConfig({ effort: level }); appConfig = loadConfig(configOverrides); webUIController.sendEffort(level); },
+    setEffort: (level) => {
+      currentEffort = level;
+      // DeepSeek thinking aktifse effort değişikliğini anında yansıt
+      if (deepseekThinking) {
+        deepseekReasoningEffort = level === 'max' ? 'max' : 'high';
+      }
+      saveConfig({ effort: level }); appConfig = loadConfig(configOverrides); webUIController.sendEffort(level);
+    },
+    getDeepSeekThinking: () => deepseekThinking,
+    setDeepSeekThinking: (enabled: boolean) => {
+      deepseekThinking = enabled;
+      // effort → reasoningEffort eşlemesi: max → max, diğer → high
+      deepseekReasoningEffort = (currentEffort === 'max') ? 'max' : 'high';
+    },
     setVimMode: (e) => { saveConfig({ repl: { ...appConfig.repl, vimMode: e } }); appConfig = loadConfig(configOverrides); },
     setMaxConcurrentTools: (n) => { currentMaxConcurrentTools = Math.max(1, Math.min(20, n)); },
     getMaxConcurrentTools: () => currentMaxConcurrentTools,
@@ -261,6 +280,7 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
   let rl: readline.Interface | null = null;
   let currentAbortController: AbortController | null = null;
   let processing = false;
+  let commandInProgress = false;
   let lastPastedContent = '';
   let isProgrammaticClose = false;
   // v3.9.3: Typeahead — chars typed while AI processes
@@ -308,6 +328,10 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
         maxTokens: appConfig.agent.maxTokens,
         cwd: currentCwd, debug: appConfig.debug,
         effort: currentEffort,
+        thinkingEnabled: currentProvider === 'deepseek' ? deepseekThinking : undefined,
+        reasoningEffort: currentProvider === 'deepseek' && deepseekThinking
+          ? (currentEffort === 'max' ? 'max' : 'high')
+          : undefined,
         abortSignal: controller.signal,
         maxConcurrentTools: currentMaxConcurrentTools,
         onText: (chunk) => {
@@ -519,8 +543,8 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
           if (_pasteMode) {
             _pasteBuffer += s ?? key?.sequence ?? ''; return;
           }
-          // AI işlenirken: yankıyı bastır (typeaheadBuffer keypress handler'da doldurulur)
-          if (processing) return;
+          // AI işlenirken ya da slash komut çalışırken: yankıyı bastır
+          if (processing || commandInProgress) return;
           // Normal: readline'ın orijinal işleyicisi
           return _origTtyWrite(s, key);
         };
@@ -528,7 +552,7 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
     }
 
     rl.on('line', async (line) => {
-      if (processing) return;
+      if (processing || commandInProgress) return;
 
       // v3.9.3: Batch rapid lines (paste debounce — 20 ms window)
       _pendingLines.push(line);
@@ -563,16 +587,27 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
         }
 
         if (trimmed.startsWith('/')) {
+          commandInProgress = true;
+          if (_lineFlushTimer) {
+            clearTimeout(_lineFlushTimer);
+            _lineFlushTimer = null;
+          }
+          _pendingLines = [];
           rl?.pause();                    // clack prompts öncesi readline'ı durdur
-          const result = await executeCommand(trimmed, ctx);
-          process.stdin.resume();         // clack stdin'i kapattıysa geri aç
-          rl?.resume();                   // readline'ı yeniden etkinleştir
-          if (result?.output) console.log(result.output);
-          if (result?.shouldExit) process.exit(0);
-          if (result?.runAsUserMessage) {
-            await runAgentTurn(result.runAsUserMessage);
-          } else {
-            if (rl) rl.prompt();
+          try {
+            const result = await executeCommand(trimmed, ctx);
+            process.stdin.resume();         // clack stdin'i kapattıysa geri aç
+            rl?.resume();                   // readline'ı yeniden etkinleştir
+            if (result?.clearTerminal) console.clear();
+            if (result?.output) console.log(result.output);
+            if (result?.shouldExit) process.exit(0);
+            if (result?.runAsUserMessage) {
+              await runAgentTurn(result.runAsUserMessage);
+            } else {
+              if (rl) rl.prompt();
+            }
+          } finally {
+            commandInProgress = false;
           }
         } else {
           await runAgentTurn(trimmed);

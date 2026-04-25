@@ -49,9 +49,17 @@ export async function listModels(name: ProviderName, config?: ProviderConfig): P
         'gemini-1.5-pro',
         'gemini-1.5-flash',
       ];
+    case 'deepseek': {
+      const baseUrl = providerBaseUrl(name, config);
+      if (!baseUrl) return ['deepseek-v4-flash', 'deepseek-v4-pro'];
+      try {
+        const models = await listOpenAiCompatibleModels(baseUrl, config?.apiKey);
+        if (models.length > 0) return models;
+      } catch { /* fallback */ }
+      return ['deepseek-v4-flash', 'deepseek-v4-pro'];
+    }
     case 'openai':
     case 'groq':
-    case 'deepseek':
     case 'mistral':
     case 'xai':
     case 'openrouter':

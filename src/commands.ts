@@ -81,12 +81,15 @@ export interface CommandContext {
   getLaneHistoriesB?: () => ChatMessage[];
   approvePlanFromWeb?: () => void;
   rejectPlanFromWeb?: () => void;
+  getDeepSeekThinking?: () => boolean;
+  setDeepSeekThinking?: (enabled: boolean) => void;
 }
 
 export interface CommandResult {
   output?: string;
   shouldExit?: boolean;
   clearAndAnimate?: boolean;
+  clearTerminal?: boolean;
   runAsUserMessage?: string;
 }
 
@@ -121,8 +124,8 @@ const COMMAND_HELP_CONTRACT: readonly CommandHelpItem[] = [
   { section: 'Bellek & Oturum', name: 'hafıza', usage: 'sil <tip>', description: 'Belirli bellek tipini temizle' },
   { section: 'Bellek & Oturum', name: 'hafıza-temizle', description: 'Tüm kalıcı belleği sil (onay ister)' },
   { section: 'Bellek & Oturum', name: 'bellek', description: 'Görev listesi + oturum özeti' },
-  { section: 'Bellek & Oturum', name: 'context-temizle', description: 'Oturumu sıfırla, yeni konuşma başlat' },
-  { section: 'Bellek & Oturum', name: 'temizle', description: 'Konuşma geçmişini temizle' },
+  { section: 'Bellek & Oturum', name: 'context-temizle', description: 'Konuşma geçmişini + terminali temizle' },
+  { section: 'Bellek & Oturum', name: 'temizle', description: 'Terminali temizle (geçmiş korunur)' },
   { section: 'Bellek & Oturum', name: 'sıkıştır', description: 'Geçmişi AI ile özetle ve sıkıştır' },
   { section: 'Bellek & Oturum', name: 'geri', description: 'Son mesajı geri al' },
   { section: 'Bellek & Oturum', name: 'kaydet', usage: '[md|html|txt|cast] [dosya]', description: 'Konuşmayı dışa aktar' },
@@ -140,6 +143,7 @@ const COMMAND_HELP_CONTRACT: readonly CommandHelpItem[] = [
   { section: 'Ayarlar', name: 'güvenlik', usage: '<safe|standard|pentest>', description: 'Güvenlik profilini ayarla' },
   { section: 'Ayarlar', name: 'tema', description: 'Renk teması (dark, light, cyberpunk, retro, ocean, sunset)' },
   { section: 'Ayarlar', name: 'apikey', usage: '[liste|sil <provider>]', description: 'API anahtarlarını yönet / sil' },
+  { section: 'Ayarlar', name: 'api-yaz', description: 'Etkileşimli API anahtarı ekleme menüsü' },
   { section: 'Ayarlar', name: 'context', usage: '<miktar>', description: 'Token bütçesi (örn: 500k, 2M)' },
   { section: 'Araçlar & Sistem', name: 'hook', usage: '[liste|örnek]', description: 'Hook sistemi (PreToolUse/PostToolUse)' },
   { section: 'Araçlar & Sistem', name: 'rapor', usage: 'pdf', description: 'Güvenlik taramasını LaTeX/PDF olarak aktar' },
@@ -437,34 +441,128 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
 
   sağlayıcı: async (args, ctx) => {
     const name = args.trim().toLowerCase() as ProviderName;
+
+    // API anahtarı gereken sağlayıcılar ve env değişkenleri
+    const API_KEY_ENV: Partial<Record<ProviderName, string>> = {
+      claude:     'ANTHROPIC_API_KEY',
+      openai:     'OPENAI_API_KEY',
+      gemini:     'GEMINI_API_KEY',
+      groq:       'GROQ_API_KEY',
+      mistral:    'MISTRAL_API_KEY',
+      xai:        'XAI_API_KEY',
+      openrouter: 'OPENROUTER_API_KEY',
+      deepseek:   'DEEPSEEK_API_KEY',
+    };
+
+    // API anahtarı eksikse sor ve settings.json'a kaydet
+    async function apiKeySorEkle(p: ProviderName): Promise<boolean> {
+      const envVar = API_KEY_ENV[p];
+      if (!envVar) return true;
+      const cfg = loadConfig();
+      if (cfg.providers[p]?.apiKey || process.env[envVar]) return true;
+      const apiKey = await text({
+        message: `${p.toUpperCase()} API anahtarınızı girin:`,
+        placeholder: 'sk-...',
+        validate: (v) => (!v?.trim() ? 'API anahtarı boş olamaz.' : undefined),
+      });
+      if (isCancel(apiKey)) return false;
+      saveConfig({ providers: { [p]: { apiKey: (apiKey as string).trim() } } } as any);
+      return true;
+    }
+
+    // Model seçim menüsü — listModels ile mevcut modelleri çek
+    async function modelSec(p: ProviderName): Promise<string | null> {
+      const cfg = loadConfig();
+      let models: string[] = [];
+      try { models = await listModels(p, cfg.providers[p]); } catch { /* fallback */ }
+      if (models.length === 0) {
+        const m = await text({ message: 'Model adını girin:' });
+        if (isCancel(m)) return null;
+        return (m as string).trim() || null;
+      }
+      if (models.length === 1) return models[0]!;
+      const selected = await select({
+        message: 'Model seçin:',
+        options: models.map(m => ({ value: m, label: m })),
+      });
+      if (isCancel(selected)) return null;
+      return selected as string;
+    }
+
+    // DeepSeek'e özel: thinking modu sorusu
+    async function thinkingSec(): Promise<string | null> {
+      const choice = await select({
+        message: 'Thinking modu:',
+        options: [
+          { value: 'on',  label: 'Açık — reasoning_effort: high (varsayılan)' },
+          { value: 'max', label: 'Açık — reasoning_effort: max (daha derin)' },
+          { value: 'off', label: 'Kapalı — sadece yanıt, daha hızlı' },
+        ],
+      });
+      if (isCancel(choice)) return null;
+      return choice as string;
+    }
+
+    // Ortak akış: sağlayıcı ayarla + model seç
+    async function saglaySec(p: ProviderName): Promise<{ output: string }> {
+      // 1. API anahtarı
+      const keyOk = await apiKeySorEkle(p);
+      if (!keyOk) return { output: chalk.dim('İptal edildi.') };
+
+      // 2. Provider'ı başlat
+      try {
+        await ctx.setProvider(p);
+      } catch (err) {
+        return { output: chalk.red(`✗ ${p} başlatılamadı: ${err instanceof Error ? err.message : String(err)}`) };
+      }
+
+      // 3. Model seç
+      const model = await modelSec(p);
+      if (!model) return { output: chalk.dim('İptal edildi.') };
+      ctx.setModel(model);
+      persistProviderAndModel(p, model);
+
+      // 4. DeepSeek: thinking modu
+      if (p === 'deepseek') {
+        const thinking = await thinkingSec();
+        if (!thinking) return { output: chalk.dim('İptal edildi.') };
+        if (ctx.setDeepSeekThinking) ctx.setDeepSeekThinking(thinking !== 'off');
+        // 'max' ve 'on' arasındaki effort farkını effort seviyesine yansıt
+        if (thinking === 'max') { if (ctx.setEffort) ctx.setEffort('max'); }
+        else if (thinking === 'on') { if (ctx.setEffort) ctx.setEffort('high'); }
+        const thinkingLabel = thinking === 'off' ? 'kapalı' : thinking === 'max' ? 'açık (max)' : 'açık (high)';
+        return { output: chalk.green(`✓ ${p} · ${model} · thinking: ${thinkingLabel}`) };
+      }
+
+      return { output: chalk.green(`✓ ${p} · ${model}`) };
+    }
+
+    // Argümansız: menü göster
     if (!name) {
       const p = await select({
         message: 'Sağlayıcı seçin:',
         options: [
-          { value: 'claude',    label: 'Claude (Anthropic)' },
-          { value: 'gemini',    label: 'Gemini (Google)' },
-          { value: 'openai',    label: 'OpenAI' },
-          { value: 'ollama',    label: 'Ollama (Yerel)' },
-          { value: 'groq',      label: 'Groq' },
-          { value: 'deepseek',  label: 'DeepSeek' },
-          { value: 'mistral',   label: 'Mistral' },
-          { value: 'xai',       label: 'xAI (Grok)' },
-          { value: 'lmstudio',  label: 'LM Studio' },
-          { value: 'openrouter',label: 'OpenRouter' },
+          { value: 'claude',     label: 'Claude (Anthropic)' },
+          { value: 'gemini',     label: 'Gemini (Google)' },
+          { value: 'openai',     label: 'OpenAI' },
+          { value: 'ollama',     label: 'Ollama (Yerel)' },
+          { value: 'groq',       label: 'Groq' },
+          { value: 'deepseek',   label: 'DeepSeek' },
+          { value: 'mistral',    label: 'Mistral' },
+          { value: 'xai',        label: 'xAI (Grok)' },
+          { value: 'lmstudio',   label: 'LM Studio' },
+          { value: 'openrouter', label: 'OpenRouter' },
         ],
       });
       if (isCancel(p)) return { output: chalk.dim('İptal edildi.') };
-      await ctx.setProvider(p as ProviderName);
-      persistProviderAndModel(p as ProviderName, ctx.currentModel);
-      return { output: chalk.green(`✓ Sağlayıcı değiştirildi: ${p}`) };
+      return saglaySec(p as ProviderName);
     }
+
     const validProviders: ProviderName[] = ['claude', 'openai', 'gemini', 'ollama', 'groq', 'deepseek', 'mistral', 'xai', 'lmstudio', 'openrouter', 'copilot'];
     if (!validProviders.includes(name)) {
       return { output: chalk.red(`Bilinmeyen sağlayıcı: ${name}`) };
     }
-    await ctx.setProvider(name);
-    persistProviderAndModel(name, ctx.currentModel);
-    return { output: chalk.green(`✓ Sağlayıcı değiştirildi: ${name}`) };
+    return saglaySec(name);
   },
 
   model: (args, ctx) => {
@@ -488,6 +586,22 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
         if (isCancel(selected)) return { output: chalk.dim('İptal edildi.') };
         ctx.setModel(selected as string);
         persistProviderAndModel(ctx.currentProvider, selected as string);
+        // DeepSeek'teyken thinking modunu da sor
+        if (ctx.currentProvider === 'deepseek' && ctx.setDeepSeekThinking) {
+          const thinkingChoice = await select({
+            message: 'Thinking modu:',
+            options: [
+              { value: 'on',  label: 'Açık — reasoning_effort: high (varsayılan)' },
+              { value: 'max', label: 'Açık — reasoning_effort: max (daha derin)' },
+              { value: 'off', label: 'Kapalı — sadece yanıt, daha hızlı' },
+            ],
+          });
+          if (!isCancel(thinkingChoice)) {
+            ctx.setDeepSeekThinking(thinkingChoice !== 'off');
+            const label = thinkingChoice === 'off' ? 'kapalı' : thinkingChoice === 'max' ? 'açık (max)' : 'açık (high)';
+            return { output: chalk.green(`✓ Model: ${selected} · thinking: ${label}`) };
+          }
+        }
         return { output: chalk.green(`✓ Model seçildi: ${selected}`) };
       }
       const model = args.trim();
@@ -619,6 +733,27 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
     return { output: chalk.red('Kullanım: /apikey [liste|set <provider> <key>|sil <provider>]') };
   },
 
+  'api-yaz': async (_args, _ctx) => {
+    const allProviders: ProviderName[] = ['claude', 'openai', 'gemini', 'deepseek', 'openrouter', 'groq', 'mistral', 'xai', 'copilot'];
+    const chosen = await select({
+      message: 'Hangi sağlayıcı için API anahtarı ekleyeceksiniz?',
+      options: allProviders.map(p => ({ value: p, label: p })),
+    });
+    if (isCancel(chosen)) return { output: chalk.dim('İptal edildi.') };
+
+    const provider = chosen as ProviderName;
+    const apiKey = await text({
+      message: `${provider} API anahtarını girin:`,
+      placeholder: 'sk-...',
+      validate: (v) => (!v?.trim() ? 'API anahtarı boş olamaz.' : undefined),
+    });
+    if (isCancel(apiKey)) return { output: chalk.dim('İptal edildi.') };
+
+    const trimmed = (apiKey as string).trim();
+    saveConfig({ providers: { [provider]: { apiKey: trimmed } } } as any);
+    return { output: chalk.green(`✓ ${provider} API anahtarı kaydedildi.`) };
+  },
+
   context: (args, ctx) => {
     const raw = args.trim();
     if (!raw) {
@@ -632,16 +767,13 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
     return { output: chalk.green(`✓ Context bütçesi ayarlandı: ${value.toLocaleString()} token`) };
   },
 
-  temizle: (_args, ctx) => {
-    ctx.clearHistory('active');
-    return { output: chalk.green('✓ Konuşma geçmişi temizlendi.') };
+  temizle: (_args, _ctx) => {
+    return { clearTerminal: true, output: chalk.dim('Terminal temizlendi.') };
   },
 
   'context-temizle': async (_args, ctx) => {
-    const sure = await confirm({ message: 'Tüm oturum sıfırlansın mı? (Yeni konuşma)' });
-    if (isCancel(sure) || !sure) return { output: chalk.gray('İptal edildi.') };
     ctx.clearHistory('all');
-    return { output: chalk.green('✓ Oturum sıfırlandı. Yeni bir başlangıç!') };
+    return { clearTerminal: true, output: chalk.green('✓ Context temizlendi.') };
   },
 
   geri: (_args, ctx) => {

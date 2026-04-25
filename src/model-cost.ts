@@ -30,7 +30,10 @@ const PRICES: Record<string, ModelPrice> = {
   'llama-3.1-8b-instant':           { input: 0.005, output: 0.008 },
   'mixtral-8x7b-32768':             { input: 0.024, output: 0.024 },
   'gemma2-9b-it':                   { input: 0.020, output: 0.020 },
-  // DeepSeek
+  // DeepSeek V4 (güncel)
+  'deepseek-v4-flash':              { input: 0.14,  output: 0.28  },
+  'deepseek-v4-pro':                { input: 0.435, output: 0.87  },
+  // DeepSeek (eski isimler — deprecated 2026-07-24)
   'deepseek-chat':                  { input: 0.14,  output: 0.28  },
   'deepseek-reasoner':              { input: 0.55,  output: 2.19  },
   // Mistral

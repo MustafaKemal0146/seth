@@ -238,11 +238,16 @@ export function persistProviderAndModel(provider: ProviderName, model: string): 
 
 /** Belirtilen sağlayıcının API anahtarını siler. */
 export function deleteApiKey(provider: ProviderName): void {
-  saveConfig({
-    providers: {
-      [provider]: { apiKey: undefined },
-    } as SETHConfig['providers'],
-  });
+  // deepMerge undefined değerleri yok saydığı için saveConfig kullanılamaz.
+  // Direkt JSON dosyasını okuyup key'i sil.
+  if (!existsSync(SETTINGS_FILE)) return;
+  let raw: Record<string, unknown> = {};
+  try { raw = JSON.parse(readFileSync(SETTINGS_FILE, 'utf-8')); } catch { return; }
+  const providers = raw.providers as Record<string, Record<string, unknown>> | undefined;
+  if (providers?.[provider]) {
+    delete providers[provider].apiKey;
+    writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), 'utf-8');
+  }
 }
 
 /** Oturum toplam token üst sınırı; `contextBudgetTokens` yoksa `agent.maxTokens`. */

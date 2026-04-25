@@ -156,20 +156,23 @@ export class ClaudeProvider implements LLMProvider {
         continue;
       }
       const blocks = normalizeContent(msg.content);
-      anthropicMessages.push({
-        role: msg.role,
-        content: blocks.map(b => this.toAnthropicBlock(b)),
-      });
+      const filtered = blocks
+        .map(b => this.toAnthropicBlock(b))
+        .filter((b): b is Anthropic.Messages.ContentBlockParam => b !== null);
+      // Tüm bloklar reasoning ise (Claude'da desteklenmez) mesajı atla
+      if (filtered.length === 0) continue;
+      anthropicMessages.push({ role: msg.role, content: filtered });
     }
 
     return { systemPrompt, anthropicMessages };
   }
 
-  private toAnthropicBlock(block: ContentBlock): Anthropic.Messages.ContentBlockParam {
+  private toAnthropicBlock(block: ContentBlock): Anthropic.Messages.ContentBlockParam | null {
     switch (block.type) {
       case 'text': return { type: 'text', text: block.text };
       case 'tool_use': return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
       case 'tool_result': return { type: 'tool_result', tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error };
+      case 'reasoning': return null; // Claude'da reasoning_content yok, görmezden gel
     }
   }
 

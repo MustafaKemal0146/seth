@@ -38,7 +38,7 @@ export class GeminiProvider implements LLMProvider {
         id: `gemini-${Date.now()}`,
         content,
         model: options.model,
-        stopReason: response.candidates?.[0]?.finishReason === 'STOP' ? 'end_turn' : 'tool_use',
+        stopReason: this.normalizeFinishReason(response.candidates?.[0]?.finishReason),
         usage: {
           inputTokens: usage?.promptTokenCount ?? 0,
           outputTokens: usage?.candidatesTokenCount ?? 0,
@@ -76,7 +76,7 @@ export class GeminiProvider implements LLMProvider {
           if (part.functionCall) {
             const toolBlock: ToolUseBlock = {
               type: 'tool_use',
-              id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              id: `${part.functionCall.name}__${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
               name: part.functionCall.name,
               input: (part.functionCall.args as Record<string, unknown>) ?? {},
             };
@@ -130,9 +130,11 @@ export class GeminiProvider implements LLMProvider {
         else if (b.type === 'tool_use') {
           parts.push({ functionCall: { name: b.name, args: b.input } });
         } else if (b.type === 'tool_result') {
+          // ID formatı: "funcName__timestamp_random" — adı geri çıkar
+          const funcName = b.tool_use_id.split('__')[0] ?? 'unknown';
           parts.push({
             functionResponse: {
-              name: 'tool_response',
+              name: funcName,
               response: { content: b.content },
             },
           });
@@ -160,13 +162,25 @@ export class GeminiProvider implements LLMProvider {
       if (part.functionCall) {
         content.push({
           type: 'tool_use',
-          id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          // Function adını ID'ye göm — functionResponse.name için geri çıkarılacak
+          id: `${part.functionCall.name}__${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           name: part.functionCall.name,
           input: (part.functionCall.args as Record<string, unknown>) ?? {},
         });
       }
     }
     return content;
+  }
+
+  private normalizeFinishReason(reason?: string): string {
+    switch (reason) {
+      case 'STOP': return 'end_turn';
+      case 'MAX_TOKENS': return 'max_tokens';
+      case 'SAFETY':
+      case 'RECITATION':
+      case 'OTHER':
+      default: return 'end_turn';
+    }
   }
 
   private toGeminiFunction(tool: ToolSchema): FunctionDeclaration {

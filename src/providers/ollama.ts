@@ -219,7 +219,9 @@ export class OllamaProvider implements LLMProvider {
           usage: { inputTokens: promptTokens, outputTokens: completionTokens },
         } satisfies ChatResponse,
       };
+      clearTimeout(timeout);
     } catch (err) {
+      clearTimeout(timeout);
       yield { type: 'error', data: err instanceof Error ? err : new Error(String(err)) };
     }
   }

@@ -42,10 +42,11 @@ export const fileReadTool: ToolDefinition = {
 
       // PDF desteği — pdftotext varsa kullan
       if (filePath.toLowerCase().endsWith('.pdf')) {
-        const { execSync } = await import('child_process');
+        const { execFileSync } = await import('child_process');
         try {
-          execSync('which pdftotext', { stdio: 'ignore' });
-          const text = execSync(`pdftotext "${filePath}" -`, { encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 });
+          execFileSync('which', ['pdftotext'], { stdio: 'ignore' });
+          // execFileSync kullanılıyor: argümanlar array olarak geçirilir, shell injection yok
+          const text = execFileSync('pdftotext', [filePath, '-'], { encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 });
           return { output: `[PDF: ${basename(filePath)}]\n\n${text.slice(0, 40000)}`, isError: false };
         } catch {
           return { output: `❌ PDF okumak için pdftotext gerekli.\nKurulum: sudo apt install poppler-utils`, isError: true };

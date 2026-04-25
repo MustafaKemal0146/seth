@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { spawn, ChildProcess } from 'child_process';
-import { Writable, Readable } from 'stream';
 import type { ToolDefinition, ToolResult } from '../types.js';
 
 let pythonWorker: ChildProcess | null = null;
@@ -73,6 +72,17 @@ export async function sethEngine(input: Record<string, unknown>): Promise<ToolRe
 export const sethEngineTool: ToolDefinition = {
   name: 'sethEngine',
   description: 'SETH Otonom Operasyon Motoru. Python Worker üzerinden Nmap, Nuclei ve Cloudflare Bypass araçlarını kontrol eder.',
-  inputSchema: sethEngineSchema as any,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      target: { type: 'string', description: 'Operasyon yapılacak hedef IP veya domain' },
+      action: {
+        type: 'string',
+        enum: ['nmap', 'nuclei', 'sqlmap', 'bypass_cloudflare', 'subdomain', 'whatweb', 'brute_force', 'dir_search', 'exploit_search', 'lateral_movement', 'config_audit', 'service_integrity', 'campaign', 'breach_query', 'get_map', 'exit'],
+        description: 'Yürütülecek siber operasyon eylemi',
+      },
+    },
+    required: ['target', 'action'],
+  },
   execute: sethEngine,
 };

@@ -34,6 +34,10 @@ export interface AgentLoopOptions {
   abortSignal?: AbortSignal;
   /** Düşünme seviyesi: low/medium/high/max */
   effort?: string;
+  /** DeepSeek thinking mode — sadece deepseek provider'da etki eder */
+  thinkingEnabled?: boolean;
+  /** DeepSeek reasoning effort (thinking açıkken) */
+  reasoningEffort?: 'high' | 'max';
   /** Birincil sağlayıcı başarısız olursa kullanılacak yedek sağlayıcı */
   fallbackProvider?: LLMProvider;
   fallbackModel?: string;
@@ -102,6 +106,8 @@ export async function runAgentLoop(
       tools: useTools ? toolSchemas : undefined,
       maxTokens,
       abortSignal: options.abortSignal,
+      thinkingEnabled: options.thinkingEnabled,
+      reasoningEffort: options.reasoningEffort,
     };
 
     // Call LLM

@@ -60,8 +60,8 @@ export async function createProvider(
     case 'deepseek': {
       const apiKey = resolveProviderApiKey('deepseek', config);
       if (!apiKey) throw new ProviderError('DEEPSEEK_API_KEY is not set. Set it in ~/.seth/settings.json or as an environment variable.', 'deepseek');
-      const { OpenAIProvider } = await import('./openai.js');
-      return new OpenAIProvider(apiKey, 'https://api.deepseek.com/v1');
+      const { DeepSeekProvider } = await import('./deepseek.js');
+      return new DeepSeekProvider(apiKey);
     }
     case 'xai': {
       const apiKey = resolveProviderApiKey('xai', config);
