@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Versiyon-3.9.3-b91c1c?style=flat-square"/>
+  <img src="https://img.shields.io/badge/Versiyon-3.9.4-b91c1c?style=flat-square"/>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white"/>
   <img src="https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white"/>
   <img src="https://img.shields.io/badge/Lisans-AGPL--3.0-blue?style=flat-square"/>
