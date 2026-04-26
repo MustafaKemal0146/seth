@@ -5,28 +5,47 @@
 
 /**
  * Uzun dosya yolunu ortadan kırp, başını ve sonunu koru.
+ *
+ * @param filePath The file path to truncate.
+ * @param maxLength Maximum length of the result.
+ * @returns Truncated path.
  */
 export function truncatePathMiddle(filePath: string, maxLength = 50): string {
   if (filePath.length <= maxLength) return filePath;
+  if (maxLength <= 0) return '';
+  if (maxLength === 1) return '…';
 
   const sep = filePath.includes('/') ? '/' : '\\';
   const parts = filePath.split(sep);
   const filename = parts[parts.length - 1] ?? '';
 
   // Sadece dosya adı bile uzunsa baştan kes
-  if (filename.length >= maxLength - 4) {
+  if (filename.length >= maxLength - 2) {
     return '…' + filename.slice(-(maxLength - 1));
   }
 
   // Baştan ne kadar alabiliriz?
-  const available = maxLength - filename.length - 4; // 4 = "/…/"
+  // prefix + sep + '…' + sep + filename
+  const available = maxLength - filename.length - 3; // 3 = sep + '…' + sep
+  if (available < 0) {
+    // filename is still too long to have a prefix, but didn't trigger the above condition
+    return '…' + filename.slice(-(maxLength - 1));
+  }
+
   let prefix = '';
-  for (const part of parts.slice(0, -1)) {
-    if (prefix.length + part.length + 1 <= available) {
-      prefix += (prefix ? sep : '') + part;
+  const prefixParts = parts.slice(0, -1);
+  for (let i = 0; i < prefixParts.length; i++) {
+    const part = prefixParts[i];
+    const nextPrefix = prefix + (prefix ? sep : '') + part;
+    if (nextPrefix.length <= available) {
+      prefix = nextPrefix;
     } else {
       break;
     }
+  }
+
+  if (!prefix) {
+    return '…' + sep + filename;
   }
 
   return `${prefix}${sep}…${sep}${filename}`;
