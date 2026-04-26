@@ -53,6 +53,12 @@ async function main(): Promise<void> {
   if (providerArg) (configOverrides as any).defaultProvider = providerArg;
   if (modelArg) (configOverrides as any).defaultModel = modelArg;
 
+  // v3.9.5: Yeni modülleri başlat
+  const { loadConfig } = await import('./config/settings.js');
+  const cfg = loadConfig(configOverrides);
+  const { initNewModules } = await import('./init-modules.js');
+  await initNewModules(cfg);
+
   if (prompt) {
     const { runHeadless } = await import('./headless.js');
     await runHeadless(prompt, { provider: providerArg, model: modelArg, noTools, debug, autoApprove });
@@ -60,8 +66,7 @@ async function main(): Promise<void> {
     const { runOnboardingIfNeeded } = await import('./onboarding.js');
     await runOnboardingIfNeeded();
 
-    const { loadConfig, resolveModel } = await import('./config/settings.js');
-    const cfg = loadConfig(configOverrides);
+    const { resolveModel } = await import('./config/settings.js');
     
     const { playIntro } = await import('./intro.js');
     await playIntro(cfg.defaultProvider, resolveModel(cfg.defaultProvider, cfg, modelArg), '');
