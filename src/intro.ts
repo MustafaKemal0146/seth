@@ -8,7 +8,10 @@ let _updateMessage: string | null = null;
 async function checkForUpdatesAsync(): Promise<void> {
   const result = await checkForUpdates();
   if (result?.hasUpdate) {
-    _updateMessage = `  ↑ Yeni sürüm: v${result.latestVersion}  →  npm install -g seth`;
+    _updateMessage = [
+      `  ⬆️ Yeni sürüm: v${result.latestVersion}  (mevcut: v${VERSION})`,
+      `  ➡️  /güncelle --auto  ile otomatik güncelle`,
+    ].join('\n');
   }
 }
 

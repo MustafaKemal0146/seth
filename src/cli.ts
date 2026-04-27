@@ -46,6 +46,24 @@ async function main(): Promise<void> {
         console.log(`seth v${VERSION}`);
         process.exit(0);
         break;
+      case '-u':
+      case '--update':
+        (async () => {
+          const { performSelfUpdate } = await import('./update-check.js');
+          console.log(chalk.cyan('🔄 SETH Self-Update başlatılıyor...\n'));
+          const result = await performSelfUpdate((msg) => console.log(chalk.dim(`  ${msg}`)));
+          console.log('');
+          if (result.success && result.method !== 'none') {
+            console.log(chalk.green(`✅ ${result.message.split('\n')[0]}`));
+            console.log(chalk.cyan(`  v${result.previousVersion} → v${result.newVersion}`));
+          } else {
+            console.log(result.success ? chalk.green(result.message) : chalk.red(result.message));
+          }
+        })().catch((err) => {
+          console.error(chalk.red(`❌ Güncelleme hatası: ${err.message}`));
+          process.exit(1);
+        });
+        break;
     }
   }
 
