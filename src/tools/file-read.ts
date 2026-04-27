@@ -5,6 +5,7 @@
 import { readFile, stat } from 'fs/promises';
 import { resolve, basename } from 'path';
 import type { ToolDefinition, ToolResult } from '../types.js';
+import { isPathSafe } from '../security/path-validation.js';
 
 const MAX_LINES = 1000;
 
@@ -28,6 +29,10 @@ export const fileReadTool: ToolDefinition = {
   requiresConfirmation: false,
 
   async execute(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
+    if (!isPathSafe(cwd, input.path as string)) {
+      return { output: `❌ Security Error: Path traversal detected. Cannot access files outside the current working directory.`, isError: true };
+    }
+
     const filePath = resolve(cwd, input.path as string);
 
     try {

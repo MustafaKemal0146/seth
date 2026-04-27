@@ -8,6 +8,7 @@ import chalk from 'chalk';
 import type { ToolDefinition, ToolResult, FileToolData } from '../types.js';
 import { webUIController } from '../web/controller.js';
 import { generateColoredDiff } from '../diff-utils.js';
+import { isPathSafe } from '../security/path-validation.js';
 
 export const fileEditTool: ToolDefinition = {
   name: 'file_edit',
@@ -37,6 +38,10 @@ export const fileEditTool: ToolDefinition = {
   requiresConfirmation: true,
 
   async execute(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
+    if (!isPathSafe(cwd, input.path as string)) {
+      return { output: `❌ Security Error: Path traversal detected. Cannot edit files outside the current working directory.`, isError: true };
+    }
+
     const filePath = resolve(cwd, input.path as string);
     const oldStr = input.old_string as string;
     const newStr = input.new_string as string;

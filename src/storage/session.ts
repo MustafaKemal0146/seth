@@ -2,7 +2,7 @@
  * @fileoverview Session persistence — JSON-based save/load.
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import type { SessionData, ChatMessage, ProviderName, TokenUsage } from '../types.js';
@@ -58,10 +58,51 @@ export function listSessions(): Array<{ id: string; provider: string; model: str
   const dir = getSessionsDir();
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter(f => f.endsWith('.json') && !f.includes('-yedek-'));
+
   return files.map(f => {
+    const filePath = join(dir, f);
     try {
-      const data = JSON.parse(readFileSync(join(dir, f), 'utf-8')) as SessionData;
+      const stats = statSync(filePath);
+
+      // Optimizasyon: Sadece dosyanın başını ve sonunu oku.
+      // id, provider, model genelde baştadır. updatedAt ise genelde sondadır.
+      const fd = openSync(filePath, 'r');
+
+      try {
+        const startSize = Math.min(1000, stats.size);
+        const startBuffer = Buffer.alloc(startSize);
+        readSync(fd, startBuffer, 0, startSize, 0);
+        const startStr = startBuffer.toString('utf-8');
+
+        const idMatch = startStr.match(/"id"\s*:\s*"([^"]+)"/);
+        const providerMatch = startStr.match(/"provider"\s*:\s*"([^"]+)"/);
+        const modelMatch = startStr.match(/"model"\s*:\s*"([^"]+)"/);
+        const tagMatch = startStr.match(/"tag"\s*:\s*"([^"]+)"/);
+
+        const endSize = Math.min(500, stats.size);
+        const endBuffer = Buffer.alloc(endSize);
+        readSync(fd, endBuffer, 0, endSize, Math.max(0, stats.size - endSize));
+        const endStr = endBuffer.toString('utf-8');
+
+        const updatedAtMatch = endStr.match(/"updatedAt"\s*:\s*"([^"]+)"/) || startStr.match(/"updatedAt"\s*:\s*"([^"]+)"/);
+
+        if (idMatch && providerMatch && modelMatch) {
+          return {
+            id: idMatch[1],
+            provider: providerMatch[1],
+            model: modelMatch[1],
+            updatedAt: updatedAtMatch ? updatedAtMatch[1] : '',
+            tag: tagMatch ? tagMatch[1] : undefined
+          };
+        }
+      } finally {
+        closeSync(fd);
+      }
+
+      // Fallback: Eger regex ile bulamazsak tüm dosyayı parse et (küçük olasılık ama doğruluğu garanti eder)
+      const data = JSON.parse(readFileSync(filePath, 'utf-8')) as SessionData;
       return { id: data.id, provider: data.provider, model: data.model, updatedAt: data.updatedAt, tag: data.tag };
+
     } catch {
       return null;
     }

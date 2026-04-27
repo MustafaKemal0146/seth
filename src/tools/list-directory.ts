@@ -5,6 +5,7 @@
 import { readdir, stat } from 'fs/promises';
 import { resolve, join, relative } from 'path';
 import type { ToolDefinition, ToolResult } from '../types.js';
+import { isPathSafe } from '../security/path-validation.js';
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_MAX_ENTRIES = 200;
@@ -33,7 +34,12 @@ export const listDirectoryTool: ToolDefinition = {
   requiresConfirmation: false,
 
   async execute(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
-    const targetPath = resolve(cwd, (input.path as string) ?? '.');
+    const inputPath = (input.path as string) ?? '.';
+    if (!isPathSafe(cwd, inputPath)) {
+      return { output: `❌ Security Error: Path traversal detected. Cannot list directories outside the current working directory.`, isError: true };
+    }
+
+    const targetPath = resolve(cwd, inputPath);
     const maxDepth = (input.max_depth as number) ?? DEFAULT_MAX_DEPTH;
     const showHidden = (input.show_hidden as boolean) ?? false;
     const pattern = input.pattern as string | undefined;

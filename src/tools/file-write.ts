@@ -6,6 +6,7 @@ import { writeFile, mkdir, stat, readFile } from 'fs/promises';
 import { dirname, resolve, basename } from 'path';
 import type { ToolDefinition, ToolResult } from '../types.js';
 import { webUIController } from '../web/controller.js';
+import { isPathSafe } from '../security/path-validation.js';
 
 export const fileWriteTool: ToolDefinition = {
   name: 'file_write',
@@ -26,6 +27,10 @@ export const fileWriteTool: ToolDefinition = {
   requiresConfirmation: true,
 
   async execute(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
+    if (!isPathSafe(cwd, input.path as string)) {
+      return { output: `❌ Security Error: Path traversal detected. Cannot write to files outside the current working directory.`, isError: true };
+    }
+
     const filePath = resolve(cwd, input.path as string);
     const content = input.content as string;
 

@@ -5,7 +5,7 @@
 
 import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { VERSION } from './version.js';
 
@@ -151,7 +151,12 @@ export async function exportSecurityReport(
 
   // pdflatex varsa PDF oluştur
   try {
-    execSync(`pdflatex -interaction=nonstopmode -output-directory="${outputDir}" "${texFile}"`, {
+    execFileSync('pdflatex', [
+      '-interaction=nonstopmode',
+      '-output-directory',
+      outputDir,
+      texFile
+    ], {
       stdio: 'ignore', timeout: 30000
     });
     return pdfFile;

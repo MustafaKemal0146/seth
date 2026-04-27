@@ -13,3 +13,21 @@ release/*.tgz
 release/*.tgz.sha256
 release/CHANGELOG-*.md
 release/artifact-manifest-*.json
+
+# IDE files
+.jules/
+.Jules/
+
+# Release artifacts (root level)
+*.tgz
+*.tar.gz
+
+# Local build config
+laction.ini
+
+# Per-developer env files
+.env.local
+.env.*.local
+
+# pnpm (proje npm kullanıyor, package-lock.json yeterli)
+pnpm-lock.yaml

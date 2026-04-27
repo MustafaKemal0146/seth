@@ -31,13 +31,17 @@ const KNOWN_MCP_SERVERS: McpServerInfo[] = [
  * Yüklü MCP server'ları keşfet.
  */
 export async function discoverMcpServers(): Promise<McpServerInfo[]> {
-  const found: McpServerInfo[] = [];
-  for (const server of KNOWN_MCP_SERVERS) {
-    try {
+  const results = await Promise.allSettled(
+    KNOWN_MCP_SERVERS.map(async (server) => {
       await execFileAsync('npx', ['--yes', server.package, '--version'], { timeout: 3000 });
-      found.push(server);
-    } catch {
-      // Yüklü değil
+      return server;
+    })
+  );
+
+  const found: McpServerInfo[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      found.push(result.value);
     }
   }
   return found;

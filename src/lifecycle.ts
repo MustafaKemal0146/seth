@@ -38,15 +38,19 @@ export async function startBackgroundCleanup(sessionsDir: string): Promise<void>
     const files = await readdir(sessionsDir).catch(() => [] as string[]);
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 gün
     let deleted = 0;
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const filePath = join(sessionsDir, file);
-      const s = await stat(filePath).catch(() => null);
-      if (s && s.mtimeMs < cutoff) {
-        await unlink(filePath).catch(() => {});
-        deleted++;
-      }
-    }
+
+    // Performance optimization: Process stat and unlink operations concurrently
+    await Promise.all(
+      files.map(async (file) => {
+        if (!file.endsWith('.json')) return;
+        const filePath = join(sessionsDir, file);
+        const s = await stat(filePath).catch(() => null);
+        if (s && s.mtimeMs < cutoff) {
+          await unlink(filePath).catch(() => {});
+          deleted++;
+        }
+      })
+    );
     if (deleted > 0) {
       // Sessizce temizle, kullanıcıya bildirme
     }
