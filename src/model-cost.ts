@@ -86,11 +86,9 @@ export function calculateCostUSD(
 }
 
 /**
- * Maliyet formatla — küçük değerler için daha fazla ondalık.
+ * Helper: format USD string
  */
 export function formatCostUSD(usd: number): string {
-  if (usd === 0) return '$0.00 (yerel)';
-  if (usd < 0.0001) return `$${(usd * 1000).toFixed(4)}m (milli-dolar)`;
-  if (usd < 0.01) return `$${usd.toFixed(6)}`;
-  return `$${usd.toFixed(4)}`;
+  if (usd < 0.0001) return '< $0.0001';
+  return `${usd.toFixed(4)}`;
 }
