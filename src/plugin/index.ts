@@ -254,12 +254,11 @@ export async function loadPlugin(
 
 export async function loadAllPlugins(config?: SETHConfig): Promise<ToolDefinition[]> {
   const files = discoverPlugins();
-  const tools: ToolDefinition[] = [];
   
-  for (const file of files) {
-    const tool = await loadPlugin(file, config);
-    if (tool) tools.push(tool);
-  }
+  const loadPromises = files.map(file => loadPlugin(file, config));
+  const results = await Promise.all(loadPromises);
+
+  const tools = results.filter((tool): tool is ToolDefinition => tool !== null);
   
   log(`Toplam ${tools.length}/${files.length} plugin yüklendi`);
   return tools;
