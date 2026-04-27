@@ -1313,7 +1313,7 @@ function startApiKeyInput(provider) {
   actionEl.innerHTML = `<div class="apikey-input-row">
     <input class="apikey-input" id="apikey-inp-${provider}" type="password" placeholder="sk-…"/>
     <button class="apikey-btn" onclick="saveApiKey('${provider}')">Kaydet</button>
-    <button class="apikey-btn" onclick="cancelApiKeyInput('${provider}')">✕</button>
+    <button class="apikey-btn" aria-label="Cancel API key input" title="Cancel" onclick="cancelApiKeyInput('${provider}')">✕</button>
   </div>`;
   const inp = $('apikey-inp-' + provider);
   if (inp) { inp.focus(); inp.addEventListener('keydown', e => { if (e.key === 'Enter') saveApiKey(provider); if (e.key === 'Escape') cancelApiKeyInput(provider); }); }
@@ -1327,7 +1327,7 @@ function saveApiKey(provider) {
   const valEl = $('apikey-val-' + provider);
   if (valEl) { valEl.innerText = '••••••••'; valEl.classList.add('set'); }
   const actionEl = $('apikey-action-' + provider);
-  if (actionEl) actionEl.innerHTML = `<button class="apikey-btn danger" onclick="deleteApiKey('${provider}')">× Del</button>`;
+  if (actionEl) actionEl.innerHTML = `<button class="apikey-btn danger" aria-label="Delete API key" title="Delete" onclick="deleteApiKey('${provider}')">× Del</button>`;
 }
 
 function cancelApiKeyInput(provider) {
@@ -1336,7 +1336,7 @@ function cancelApiKeyInput(provider) {
   const actionEl = $('apikey-action-' + provider);
   if (!actionEl) return;
   if (hasKey) {
-    actionEl.innerHTML = `<button class="apikey-btn danger" onclick="deleteApiKey('${provider}')">× Del</button>`;
+    actionEl.innerHTML = `<button class="apikey-btn danger" aria-label="Delete API key" title="Delete" onclick="deleteApiKey('${provider}')">× Del</button>`;
   } else {
     actionEl.innerHTML = `<button class="apikey-btn" onclick="startApiKeyInput('${provider}')">+ Set</button>`;
   }
