@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Text, Static } from 'ink';
 import { useSethAgent, type UseSethAgentOptions } from './hooks/useSethAgent.js';
 import { ChatMessage } from './ChatMessage.js';
@@ -29,11 +29,14 @@ export function App({ agentOptions }: AppProps) {
   // Sadece mesajları statik olarak render ediyoruz.
   // Logo ve giriş bilgileri zaten intro.ts tarafından (cli.ts içinde) basıldı.
   // Ink bunları tekrar basmamalı, aksi halde duplicate olur.
-  const staticItems: StaticItem[] = history.map((msg, i) => ({ 
-    type: 'message', 
-    id: `msg-${i}`, 
-    message: msg 
-  } as StaticItem));
+  // ⚡ Bolt Optimization: Memoize static items array creation to prevent mapping the entire history on every render chunk during streaming.
+  const staticItems: StaticItem[] = useMemo(() => {
+    return history.map((msg, i) => ({
+      type: 'message',
+      id: `msg-${i}`,
+      message: msg
+    } as StaticItem));
+  }, [history]);
 
   return (
     <Box flexDirection="column" paddingX={0}>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Text } from 'ink';
 import { marked } from 'marked';
 import TerminalRenderer from 'marked-terminal';
@@ -51,13 +51,15 @@ function renderContent(content: string | ContentBlock[]): string {
   }
 }
 
-export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
+export const ChatMessage = React.memo(function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const roleLabel = isUser ? ' > ' : ' ≻ ';
   const roleName = isUser ? 'KULLANICI' : 'SETH';
   const roleColor = isUser ? 'cyan' : 'red';
 
-  const formattedText = renderContent(message.content);
+  // ⚡ Bolt Optimization: Memoize expensive markdown parsing based on message content identity
+  const formattedText = useMemo(() => renderContent(message.content), [message.content]);
+
   if (!formattedText && !isStreaming) return null;
 
   if (message.role === 'system') return null;
@@ -78,4 +80,4 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
       )}
     </Box>
   );
-}
+});
