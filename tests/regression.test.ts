@@ -7,7 +7,7 @@ import { parseIntervalStr } from '../src/cron.js';
 
 describe('version', () => {
   it('sürüm 3.9.7 olmalı', () => {
-    expect(VERSION).toBe('3.9.7');
+    expect(VERSION).toBe('4.0.1');
   });
 });
 
