@@ -67,9 +67,9 @@ async function main(): Promise<void> {
     }
   }
 
-  const configOverrides: Partial<SETHConfig> = { debug, autoApprove };
-  if (providerArg) (configOverrides as any).defaultProvider = providerArg;
-  if (modelArg) (configOverrides as any).defaultModel = modelArg;
+  const configOverrides: { -readonly [K in keyof SETHConfig]?: SETHConfig[K] } = { debug, autoApprove };
+  if (providerArg) configOverrides.defaultProvider = providerArg as ProviderName;
+  if (modelArg) configOverrides.defaultModel = modelArg;
 
   // v3.9.5: Yeni modülleri başlat
   const { loadConfig } = await import('./config/settings.js');

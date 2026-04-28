@@ -84,6 +84,10 @@ export async function startRepl(configOverrides?: Partial<SETHConfig>, skipWelco
   setupGracefulShutdown();
   void startBackgroundCleanup(pathJoin(homedir(), '.seth', 'sessions'));
 
+  // Seth Engine arka plan sunucusunu başlat
+  const { startSethEngine } = await import('./seth-engine/bridge.js');
+  startSethEngine();
+
   let currentProvider: ProviderName = appConfig.defaultProvider;
   let currentModel = resolveModel(currentProvider, appConfig);
   let toolsEnabled = true;

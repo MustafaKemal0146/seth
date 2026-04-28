@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { SETHConfig, SecurityProfile } from '../types.js';
+import { generateId as makeId } from '../utils/id.js';
 
 // ---------------------------------------------------------------------------
 // Tipler
@@ -108,7 +109,7 @@ function log(msg: string): void {
 }
 
 function generateId(): string {
-  return `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return makeId('audit');
 }
 
 function ensureDir(): void {

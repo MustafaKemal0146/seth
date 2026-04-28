@@ -1,0 +1,4 @@
+## 2025-02-14 - Path Traversal vulnerabilities in file manipulation tools
+**Vulnerability:** The core file manipulation tools (`file_read`, `file_write`, `file_edit`, `list_directory`) used `path.resolve(cwd, input.path)` which resolves to the absolute path correctly, but allowed the agent to perform actions outside of the provided `cwd` if `input.path` included traversal segments (e.g., `../../etc/passwd`).
+**Learning:** Tools relying on `path.resolve` with user/agent-provided paths do not intrinsically boundary-check against the original `cwd`.
+**Prevention:** Implemented a new `isPathSafe` utility in `src/security/path-validation.ts` to check if `targetPath` resolves within `cwd` using `path.relative()`, ensuring agents or commands cannot read or modify unauthorized paths. Applied this check across all standard file operations.

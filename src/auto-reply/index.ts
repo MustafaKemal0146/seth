@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { generateId as makeId } from '../utils/id.js';
 
 // ---------------------------------------------------------------------------
 // Tipler
@@ -102,7 +103,7 @@ function log(msg: string): void {
 }
 
 function generateRuleId(): string {
-  return `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return makeId('rule');
 }
 
 function ensureDir(): void {

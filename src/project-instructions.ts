@@ -72,16 +72,23 @@ function osTypeLabel(): string {
 }
 
 function getGitStatus(cwd: string): string {
+  const gitOpts = {
+    cwd,
+    stdio: 'pipe' as const,
+    timeout: 5_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  };
   try {
-    const isGit = execSync('git rev-parse --is-inside-work-tree', { cwd, stdio: 'pipe' }).toString().trim() === 'true';
+    const isGit = execSync('git --no-pager rev-parse --is-inside-work-tree', gitOpts).toString().trim() === 'true';
     if (!isGit) return '';
-    const branch = execSync('git branch --show-current', { cwd, stdio: 'pipe' }).toString().trim();
-    let status = execSync('git status --short', { cwd, stdio: 'pipe' }).toString().trim();
-    const log = execSync('git log --oneline -n 3', { cwd, stdio: 'pipe' }).toString().trim();
+    const branch = execSync('git --no-pager branch --show-current', gitOpts).toString().trim();
+    let status = execSync('git --no-pager status --short', gitOpts).toString().trim();
+    const log = execSync('git --no-pager log --oneline -n 3', gitOpts).toString().trim();
     if (status.length > 2000) status = status.slice(0, 2000) + '\n... (çok uzun, kesildi)';
-    
+
     return `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nGİT DURUMU\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nGeçerli dal: ${branch}\nDurum:\n${status || '(temiz)'}\n\nSon commitler:\n${log}\n`;
-  } catch {
+  } catch (err) {
+    if (process.env.SETH_DEBUG) console.error('[seth:project-instructions] getGitStatus failed', err);
     return '';
   }
 }

@@ -32,6 +32,8 @@ npm start
 
 - Node.js >= 20.0.0
 - npm (comes with Node.js)
+- Python 3.8+ (Seth Engine modülü için)
+- Python paketleri: `pip install flask requests aiohttp beautifulsoup4 selenium mitmproxy psutil mcp`
 
 ## First Run
 

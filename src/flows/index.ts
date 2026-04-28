@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { ProviderName, SETHConfig } from '../types.js';
+import { generateId as makeId } from '../utils/id.js';
 
 // ---------------------------------------------------------------------------
 // Tipler
@@ -79,7 +80,7 @@ function log(msg: string): void {
 }
 
 function generateFlowId(): string {
-  return `flow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return makeId('flow');
 }
 
 function ensureDir(): void {

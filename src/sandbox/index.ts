@@ -4,10 +4,11 @@
  * AGPL-3.0
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync } from 'fs';
-import { join, resolve, sep } from 'path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, realpathSync } from 'fs';
+import { join, resolve, sep, dirname } from 'path';
 import { homedir, tmpdir } from 'os';
-import { execSync, exec } from 'child_process';
+import { execSync, spawnSync, exec } from 'child_process';
+import { generateId as makeId } from '../utils/id.js';
 
 // ---------------------------------------------------------------------------
 // Tipler
@@ -46,7 +47,7 @@ function log(msg: string): void {
 }
 
 function generateSandboxId(): string {
-  return `sbox_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return makeId('sbox');
 }
 
 // ---------------------------------------------------------------------------
@@ -134,40 +135,32 @@ export function runInDocker(
   const memoryLimit = config?.memoryLimit || '512m';
   const cpuLimit = config?.cpuLimit || '1';
   const timeout = config?.timeout || 60_000;
-  const networkFlag = config?.networkAccess ? '' : '--network none';
 
-  const dockerCmd = [
-    'docker', 'run', '--rm',
-    networkFlag,
-    `--memory=${memoryLimit}`,
-    `--cpus=${cpuLimit}`,
-    '-i',
-    image,
-    'sh', '-c',
-    `"${command.replace(/"/g, '\\"')}"`,
-  ].join(' ');
+  const dockerArgs: string[] = ['run', '--rm'];
+  if (!config?.networkAccess) dockerArgs.push('--network', 'none');
+  dockerArgs.push(`--memory=${memoryLimit}`, `--cpus=${cpuLimit}`, '-i', image, 'sh', '-c', command);
 
-  try {
-    const output = execSync(dockerCmd, {
-      timeout,
-      encoding: 'utf-8',
-      maxBuffer: 5 * 1024 * 1024,
-    });
+  const result = spawnSync('docker', dockerArgs, {
+    timeout,
+    encoding: 'utf-8',
+    maxBuffer: 5 * 1024 * 1024,
+  });
 
+  if (result.error) {
     return {
-      output: output.trim(),
-      exitCode: 0,
-      duration: Date.now() - start,
-    };
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; status?: number; message?: string };
-    return {
-      output: e.stdout || '',
-      exitCode: e.status || 1,
-      error: e.stderr || e.message || String(err),
+      output: result.stdout?.trim() || '',
+      exitCode: 1,
+      error: result.error.message,
       duration: Date.now() - start,
     };
   }
+
+  return {
+    output: (result.stdout || '').trim(),
+    exitCode: result.status ?? 0,
+    error: result.status && result.status !== 0 ? (result.stderr || '').trim() : undefined,
+    duration: Date.now() - start,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +200,27 @@ export function executeSandboxAsync(
 // Dosya İşlemleri (Sandbox içinde)
 // ---------------------------------------------------------------------------
 
+const MAX_WALK_DEPTH = 32;
+
+/**
+ * Verilen path'in sandbox kökü altında kaldığını symlink takibiyle birlikte doğrular.
+ * Dosya/klasör yoksa en yakın mevcut atayı çözüp doğrular.
+ */
+function ensureWithinSandbox(sandboxDir: string, fullPath: string, label: string): string {
+  const resolvedSandbox = realpathSync(resolve(sandboxDir));
+
+  // En yakın mevcut atayı bul (yeni dosya yazılıyorsa parent zinciri yukarı çık)
+  let probe = fullPath;
+  while (!existsSync(probe) && probe !== dirname(probe)) {
+    probe = dirname(probe);
+  }
+  const realProbe = realpathSync(probe);
+  if (realProbe !== resolvedSandbox && !realProbe.startsWith(resolvedSandbox + sep)) {
+    throw new Error(`Güvenlik ihlali: Sandbox dışına erişim engellendi (${label})`);
+  }
+  return resolvedSandbox;
+}
+
 export function sandboxWriteFile(sandboxDir: string, filePath: string, content: string): void {
   const fullPath = resolve(sandboxDir, filePath);
   const resolvedSandbox = resolve(sandboxDir);
@@ -215,10 +229,11 @@ export function sandboxWriteFile(sandboxDir: string, filePath: string, content: 
     throw new Error(`Güvenlik ihlali: Sandbox dışına erişim engellendi (${filePath})`);
   }
 
-  const dir = join(fullPath, '..');
+  const dir = dirname(fullPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
+  ensureWithinSandbox(sandboxDir, fullPath, filePath);
   writeFileSync(fullPath, content, 'utf-8');
 }
 
@@ -233,28 +248,32 @@ export function sandboxReadFile(sandboxDir: string, filePath: string): string {
   if (!existsSync(fullPath)) {
     throw new Error(`Dosya bulunamadı: ${filePath}`);
   }
+  ensureWithinSandbox(sandboxDir, fullPath, filePath);
   return readFileSync(fullPath, 'utf-8');
 }
 
 export function sandboxListFiles(sandboxDir: string): string[] {
-
-  function walk(dir: string): string[] {
+  function walk(dir: string, depth: number): string[] {
+    if (depth > MAX_WALK_DEPTH) return [];
     const files: string[] = [];
     try {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
+        if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory() && !entry.name.startsWith('.')) {
-          files.push(...walk(full));
+          files.push(...walk(full, depth + 1));
         } else if (entry.isFile()) {
-          files.push(full.replace(sandboxDir + '/', ''));
+          files.push(full.replace(sandboxDir + sep, ''));
         }
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      if (process.env.SETH_DEBUG) console.error('[seth:sandbox] walk error', err);
+    }
     return files;
   }
 
   if (!existsSync(sandboxDir)) return [];
-  return walk(sandboxDir);
+  return walk(sandboxDir, 0);
 }
 
 // ---------------------------------------------------------------------------

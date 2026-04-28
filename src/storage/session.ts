@@ -103,7 +103,8 @@ export function listSessions(): Array<{ id: string; provider: string; model: str
       const data = JSON.parse(readFileSync(filePath, 'utf-8')) as SessionData;
       return { id: data.id, provider: data.provider, model: data.model, updatedAt: data.updatedAt, tag: data.tag };
 
-    } catch {
+    } catch (err) {
+      if (process.env.SETH_DEBUG) console.error('[seth:session] listSessions failed', err);
       return null;
     }
   }).filter((s): s is NonNullable<typeof s> => s !== null);

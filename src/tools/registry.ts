@@ -199,6 +199,16 @@ export async function createDefaultRegistry(config?: SETHConfig): Promise<ToolRe
   registry.register(taskGetTool);
   registry.register(taskStopTool);
 
+  // Seth Engine tool'larını keşfet ve kaydet (arka planda)
+  const { registerSethEngineTools } = await import('../seth-engine/registry.js');
+  registerSethEngineTools(registry).then(eklenen => {
+    if (eklenen > 0) {
+      snapshotToolRegistry(registry);
+    }
+  }).catch(() => {
+    // Engine yoksa sessizce geç
+  });
+
   snapshotToolRegistry(registry);
   return registry;
 }

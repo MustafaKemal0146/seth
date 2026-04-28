@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "seth-engine": {
+      "command": "python3",
+      "args": [
+        "/path/seth_engine_mcp.py",
+        "--server",
+        "http://localhost:8888"
+      ],
+      "description": "Seth Engine - Advanced Cybersecurity Automation Platform",
+      "timeout": 300,
+      "alwaysAllow": []
+    }
+  }
+}

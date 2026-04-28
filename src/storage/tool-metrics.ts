@@ -70,16 +70,16 @@ export async function logToolMetric(event: ToolMetricEvent): Promise<void> {
     await appendFile(EVENTS_FILE, JSON.stringify(event) + '\n', 'utf8');
     pendingSummaryEvents.push(event);
     scheduleSummaryFlush();
-  } catch {
-    // telemetry should never break the tool path
+  } catch (err) {
+    if (process.env.SETH_DEBUG) console.error('[seth:tool-metrics] logToolMetric failed', err);
   }
 }
 
 function scheduleSummaryFlush(): void {
   if (summaryFlushInFlight) return;
   summaryFlushInFlight = flushSummaryEvents()
-    .catch(() => {
-      // ignore summary write errors
+    .catch((err) => {
+      if (process.env.SETH_DEBUG) console.error('[seth:tool-metrics] summary flush failed', err);
     })
     .finally(() => {
       summaryFlushInFlight = null;

@@ -6,6 +6,7 @@
 import type { LLMProvider, ChatMessage, ChatOptions, ChatResponse, StreamEvent, ContentBlock, ToolSchema, ToolUseBlock, TextBlock } from '../types.js';
 import { ProviderError } from '../core/errors.js';
 import { normalizeContent } from '../core/message.js';
+import { generateId } from '../utils/id.js';
 
 interface OllamaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -77,9 +78,8 @@ export class OllamaProvider implements LLMProvider {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    if (options.abortSignal) {
-      options.abortSignal.addEventListener('abort', () => controller.abort());
-    }
+    const onAbort = () => controller.abort();
+    options.abortSignal?.addEventListener('abort', onAbort);
 
     try {
       const res = await fetch(`${this.baseUrl}/api/chat`, {
@@ -115,6 +115,9 @@ export class OllamaProvider implements LLMProvider {
         );
       }
       throw new ProviderError(message, 'ollama');
+    } finally {
+      clearTimeout(timeout);
+      options.abortSignal?.removeEventListener('abort', onAbort);
     }
   }
 
@@ -124,9 +127,8 @@ export class OllamaProvider implements LLMProvider {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    if (options.abortSignal) {
-      options.abortSignal.addEventListener('abort', () => controller.abort());
-    }
+    const onAbort = () => controller.abort();
+    options.abortSignal?.addEventListener('abort', onAbort);
 
     try {
       const res = await fetch(`${this.baseUrl}/api/chat`, {
@@ -186,7 +188,7 @@ export class OllamaProvider implements LLMProvider {
               for (const tc of chunk.message.tool_calls) {
                 const block: ToolUseBlock = {
                   type: 'tool_use',
-                  id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                  id: generateId('call'),
                   name: tc.function.name,
                   input: tc.function.arguments,
                 };
@@ -219,10 +221,11 @@ export class OllamaProvider implements LLMProvider {
           usage: { inputTokens: promptTokens, outputTokens: completionTokens },
         } satisfies ChatResponse,
       };
-      clearTimeout(timeout);
     } catch (err) {
-      clearTimeout(timeout);
       yield { type: 'error', data: err instanceof Error ? err : new Error(String(err)) };
+    } finally {
+      clearTimeout(timeout);
+      options.abortSignal?.removeEventListener('abort', onAbort);
     }
   }
 
@@ -285,7 +288,7 @@ export class OllamaProvider implements LLMProvider {
       for (const tc of data.message.tool_calls) {
         content.push({
           type: 'tool_use',
-          id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: generateId('call'),
           name: tc.function.name,
           input: tc.function.arguments,
         });

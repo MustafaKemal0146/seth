@@ -1,5 +1,29 @@
 # Değişiklik Günlüğü
 
+## [3.9.7] - 2026-04-28
+
+### 🚀 Yeni Özellikler
+
+- **Seth Engine** (`src/seth-engine/`): SETH'e gömülü gelişmiş siber güvenlik motoru.
+  - 150 yeni MCP tool (toplam 210+ araç)
+  - 54 sınıf ile otomatik pentest, CTF çözümü, exploit üretimi
+  - AI destekli karar motoru ve parametre optimizasyonu
+  - MCP protokolü ile SETH tool registry'sine otomatik entegrasyon
+  - SETH ile birlikte otomatik başlar ve kapanır
+
+- **Yeni Tool Kategorileri:**
+  - Binary exploitation: ghidra, gdb, radare2, angr, pwntools
+  - Bulut güvenlik: prowler, trivy, kube-hunter, checkov
+  - Bug bounty: auth bypass, file upload, business logic workflow
+  - API güvenlik: api fuzzer, graphql scanner, jwt analyzer
+  - Memory forensics: volatility, foremost, binwalk
+
+### 🔧 İyileştirmeler
+
+- MCP altyapısı güçlendirildi (150 tool ile uyum)
+- Tool registry dinamik keşif desteği kazandı
+- Lifecycle modülü arka plan servis yönetimi için genişletildi
+
 ## [3.9.6] - 2026-04-27
 
 ### 🚀 Yeni Özellikler

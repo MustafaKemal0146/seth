@@ -51,8 +51,8 @@ export class ClaudeProvider implements LLMProvider {
           model: options.model,
           max_tokens: options.maxTokens ?? 4096,
           messages: anthropicMessages,
-          system: cachedSystem as any,
-          tools: cachedTools as any,
+          system: cachedSystem,
+          tools: cachedTools,
           temperature: options.temperature,
         },
         { signal: options.abortSignal },
@@ -86,8 +86,8 @@ export class ClaudeProvider implements LLMProvider {
         model: options.model,
         max_tokens: options.maxTokens ?? 4096,
         messages: anthropicMessages,
-        system: cachedSystem as any,
-        tools: cachedTools as any,
+        system: cachedSystem,
+        tools: cachedTools,
         temperature: options.temperature,
       },
       { signal: options.abortSignal },
@@ -193,16 +193,16 @@ export class ClaudeProvider implements LLMProvider {
   }
 
   /** System promptu önbelleklenebilir blok dizisine dönüştür. */
-  private buildCachedSystem(systemPrompt: string | undefined): any {
+  private buildCachedSystem(systemPrompt: string | undefined): Anthropic.Messages.MessageCreateParams['system'] {
     if (!systemPrompt) return undefined;
     return [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
   }
 
   /** Tool listesini önbelleklenebilir hale getir (son araça cache_control ekle). */
-  private toCachedTools(tools: readonly ToolSchema[]): any[] {
+  private toCachedTools(tools: readonly ToolSchema[]): Anthropic.Messages.Tool[] {
     const anthropicTools = this.toAnthropicTools(tools);
     if (anthropicTools.length === 0) return anthropicTools;
-    const last = { ...anthropicTools[anthropicTools.length - 1]!, cache_control: { type: 'ephemeral' } };
+    const last = { ...anthropicTools[anthropicTools.length - 1]!, cache_control: { type: 'ephemeral' as const } };
     return [...anthropicTools.slice(0, -1), last];
   }
 }

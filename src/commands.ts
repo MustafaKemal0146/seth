@@ -259,25 +259,38 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
     const res = await sethEngine({ target: 'STATE', action: 'get_map' });
     if (res.isError) return { output: chalk.red('Harita verisi alınamadı.') };
     
-    const state = JSON.parse(res.output).data;
+    interface OperationTarget {
+      subdomains: string[];
+      ports: string[];
+      risks: string[];
+    }
+    interface LeakRecord {
+      user: string;
+      source: string;
+    }
+    interface OperationState {
+      start_time: string;
+      targets: Record<string, OperationTarget>;
+      leaks: LeakRecord[];
+    }
+    const state = (JSON.parse(res.output) as { data: OperationState }).data;
     let output = `\n${chalk.bold.cyan('🌐 SETH CANLI OPERASYON HARİTASI')}\n`;
     output += `${chalk.dim('Başlangıç:')} ${state.start_time}\n`;
     output += `─`.repeat(40) + '\n';
 
-    for (const [target, info] of Object.entries(state.targets)) {
-      const targetInfo = info as any;
+    for (const [target, targetInfo] of Object.entries(state.targets)) {
       output += `${chalk.green('●')} ${chalk.bold(target)}\n`;
       if (targetInfo.subdomains.length) output += `  ├─ ${chalk.blue('Subdomainler:')} ${targetInfo.subdomains.length} adet\n`;
       if (targetInfo.ports.length) {
         output += `  ├─ ${chalk.yellow('Açık Portlar:')}\n`;
-        targetInfo.ports.forEach((p: string) => output += `  │  └── ${p}\n`);
+        targetInfo.ports.forEach((p) => output += `  │  └── ${p}\n`);
       }
       output += `  └─ ${chalk.magenta('Riskler:')} ${targetInfo.risks.length || 'Analiz Ediliyor'}\n`;
     }
 
     if (state.leaks.length) {
       output += `\n${chalk.red('🔥 SIZINTI VERİLERİ (BREACHES)')}\n`;
-      state.leaks.forEach((l: any) => output += `  • ${l.user} [${l.source}]\n`);
+      state.leaks.forEach((l) => output += `  • ${l.user} [${l.source}]\n`);
     }
 
     return { output: output + '\n' };
@@ -479,7 +492,7 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
       saveConfig({ tools: { ...ctx.config.tools, requireConfirmation: p !== 'full' } });
       return { output: chalk.green(`✓ İzin seviyesi: ${p}`) };
     }
-    if (!valid.includes(level as any)) return { output: chalk.red('Geçersiz seviye: full, normal, dar') };
+    if (!valid.includes(level as PermissionLevel)) return { output: chalk.red('Geçersiz seviye: full, normal, dar') };
     ctx.setPermissionLevel(level as PermissionLevel);
     saveConfig({ tools: { ...ctx.config.tools, requireConfirmation: level !== 'full' } });
     return { output: chalk.green(`✓ İzin seviyesi: ${level}`) };
@@ -512,7 +525,7 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
         validate: (v) => (!v?.trim() ? 'API anahtarı boş olamaz.' : undefined),
       });
       if (isCancel(apiKey)) return false;
-      saveConfig({ providers: { [p]: { apiKey: (apiKey as string).trim() } } } as any);
+      saveConfig({ providers: { [p]: { apiKey: (apiKey as string).trim() } } });
       return true;
     }
 
@@ -796,7 +809,7 @@ SETH artık bir ordu gibi düşünen 'Leviathan' çekirdeğine sahip. Yaratıcı
     if (isCancel(apiKey)) return { output: chalk.dim('İptal edildi.') };
 
     const trimmed = (apiKey as string).trim();
-    saveConfig({ providers: { [provider]: { apiKey: trimmed } } } as any);
+    saveConfig({ providers: { [provider]: { apiKey: trimmed } } });
     return { output: chalk.green(`✓ ${provider} API anahtarı kaydedildi.`) };
   },
 
@@ -1630,31 +1643,46 @@ ${chalk.dim('Yanıt süresi: 24 saat içinde • Çalışma dili: Türkçe, İng
 
   // ─── Kod İnceleme (v3.9.2) ─────────────────────────────────────────────────
   incele: async (args, ctx) => {
-    const { execSync } = await import('child_process');
+    const { spawnSync } = await import('child_process');
     const trimmed = args.trim();
+
+    const gitOpts = {
+      encoding: 'utf-8' as const,
+      stdio: 'pipe' as const,
+      cwd: ctx.getCwd(),
+      timeout: 5_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    };
+    const runGit = (gitArgs: string[]): string => {
+      const r = spawnSync('git', ['--no-pager', ...gitArgs], gitOpts);
+      if (r.error) throw r.error;
+      if (r.status !== 0) throw new Error(r.stderr?.toString().trim() || `git ${gitArgs.join(' ')} exited ${r.status}`);
+      return (r.stdout ?? '').toString();
+    };
 
     let diff = '';
     let label = '';
 
     try {
       if (trimmed === '--head' || trimmed === 'head') {
-        diff = execSync('git diff HEAD~1', { encoding: 'utf-8', stdio: 'pipe', cwd: ctx.getCwd() });
+        diff = runGit(['diff', 'HEAD~1']);
         label = 'Son commit';
       } else if (trimmed && !trimmed.startsWith('--')) {
-        // Belirli dosya
-        diff = execSync(`git diff HEAD -- ${trimmed}`, { encoding: 'utf-8', stdio: 'pipe', cwd: ctx.getCwd() });
+        // Belirli dosya — argüman dizisi olarak geçer, shell yorumlamaz
+        diff = runGit(['diff', 'HEAD', '--', trimmed]);
         label = `Dosya: ${trimmed}`;
       } else {
         // --staged veya varsayılan
-        diff = execSync('git diff --staged', { encoding: 'utf-8', stdio: 'pipe', cwd: ctx.getCwd() });
+        diff = runGit(['diff', '--staged']);
         label = 'Staged değişiklikler';
         if (!diff.trim()) {
-          diff = execSync('git diff', { encoding: 'utf-8', stdio: 'pipe', cwd: ctx.getCwd() });
+          diff = runGit(['diff']);
           label = 'Unstaged değişiklikler';
         }
       }
-    } catch (err: any) {
-      return { output: chalk.red(`  ✗ Git diff alınamadı: ${err.message?.slice(0, 200) ?? String(err)}`) };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { output: chalk.red(`  ✗ Git diff alınamadı: ${msg.slice(0, 200)}`) };
     }
 
     if (!diff.trim()) {

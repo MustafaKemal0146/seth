@@ -6,8 +6,8 @@ import { compareVersions } from '../src/update-check.js';
 import { parseIntervalStr } from '../src/cron.js';
 
 describe('version', () => {
-  it('sürüm 3.9.6 olmalı', () => {
-    expect(VERSION).toBe('3.9.6');
+  it('sürüm 3.9.7 olmalı', () => {
+    expect(VERSION).toBe('3.9.7');
   });
 });
 

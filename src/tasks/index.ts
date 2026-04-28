@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { exec } from 'child_process';
+import { generateId as makeId } from '../utils/id.js';
 
 // ---------------------------------------------------------------------------
 // Tipler
@@ -65,7 +66,7 @@ function log(msg: string): void {
 }
 
 function generateId(): string {
-  return `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return makeId('task');
 }
 
 function ensureDir(): void {

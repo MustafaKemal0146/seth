@@ -6,6 +6,7 @@ import { GoogleGenerativeAI, type Content, type Part, type FunctionDeclaration }
 import type { LLMProvider, ChatMessage, ChatOptions, ChatResponse, StreamEvent, ContentBlock, ToolSchema, ToolUseBlock } from '../types.js';
 import { ProviderError } from '../core/errors.js';
 import { normalizeContent } from '../core/message.js';
+import { generateId } from '../utils/id.js';
 
 export class GeminiProvider implements LLMProvider {
   readonly name = 'gemini' as const;
@@ -76,7 +77,7 @@ export class GeminiProvider implements LLMProvider {
           if (part.functionCall) {
             const toolBlock: ToolUseBlock = {
               type: 'tool_use',
-              id: `${part.functionCall.name}__${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              id: `${part.functionCall.name}__${generateId()}`,
               name: part.functionCall.name,
               input: (part.functionCall.args as Record<string, unknown>) ?? {},
             };
@@ -163,7 +164,7 @@ export class GeminiProvider implements LLMProvider {
         content.push({
           type: 'tool_use',
           // Function adını ID'ye göm — functionResponse.name için geri çıkarılacak
-          id: `${part.functionCall.name}__${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: `${part.functionCall.name}__${generateId()}`,
           name: part.functionCall.name,
           input: (part.functionCall.args as Record<string, unknown>) ?? {},
         });
